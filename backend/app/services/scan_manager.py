@@ -8,6 +8,7 @@ import threading
 from uuid import uuid4
 
 from backend.app.analyzer.rules import SecurityFinding, analyze_scan
+from backend.app.reports.html_report import ReportData
 from backend.app.schemas.scan import (
     FindingResponse,
     PortResponse,
@@ -152,6 +153,19 @@ class ScanManager:
                     )
                     for finding in record.findings
                 ],
+            )
+
+    def get_report_data(self, scan_id: str) -> ReportData:
+        with self._lock:
+            record = self._records.get(scan_id)
+            if record is None:
+                raise ScanNotFoundError(scan_id)
+            if record.status is not ScanStatus.COMPLETED or record.result is None:
+                raise ScanNotReadyError(record.status.value)
+            return ReportData(
+                scan=self._to_response(record),
+                ports=self.get_ports(scan_id),
+                findings=self.get_findings(scan_id),
             )
 
     def shutdown(self) -> None:

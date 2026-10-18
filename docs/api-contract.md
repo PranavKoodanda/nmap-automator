@@ -117,6 +117,17 @@ observations on the scanned target and do not establish external exposure or
 prove a vulnerability. Queued, running, and failed scans return `409`;
 unknown IDs return `404`.
 
+## `GET /api/scans/{scan_id}/report`
+
+Returns a self-contained HTML security assessment report for a completed scan.
+The response is `200 OK` with `Content-Type: text/html; charset=utf-8` and a
+safe attachment filename such as `scan-<scan_id>.html`.
+
+Queued, running, and failed scans return `409`; unknown IDs return `404`.
+The report uses the same stored ports, summary, and rule-based findings as the
+JSON endpoints. It does not add vulnerability analysis, establish external
+reachability, or claim that an empty findings list means the target is secure.
+
 ## Development server
 
 From the repository root:

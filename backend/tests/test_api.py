@@ -75,6 +75,13 @@ def test_create_complete_and_get_ports() -> None:
         findings = client.get(f"/api/scans/{scan['scan_id']}/findings")
         assert findings.status_code == 200
         assert findings.json()["findings"] == []
+        report = client.get(f"/api/scans/{scan['scan_id']}/report")
+        assert report.status_code == 200
+        assert report.headers["content-type"] == "text/html; charset=utf-8"
+        assert report.headers["content-disposition"] == (
+            f'attachment; filename="scan-{scan["scan_id"]}.html"'
+        )
+        assert "Security Assessment Report" in report.text
     finally:
         manager.shutdown()
 
@@ -136,7 +143,9 @@ def test_failure_and_unknown_scan_responses() -> None:
         assert failed["error"] == "execution timed out"
         assert client.get(f"/api/scans/{created['scan_id']}/ports").status_code == 409
         assert client.get(f"/api/scans/{created['scan_id']}/findings").status_code == 409
+        assert client.get(f"/api/scans/{created['scan_id']}/report").status_code == 409
         assert client.get("/api/scans/missing").status_code == 404
+        assert client.get("/api/scans/missing/report").status_code == 404
     finally:
         manager.shutdown()
 
