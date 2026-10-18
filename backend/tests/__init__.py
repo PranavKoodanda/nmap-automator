@@ -1,0 +1,1 @@
+"""Scanner foundation tests."""
