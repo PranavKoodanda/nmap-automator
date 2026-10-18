@@ -70,13 +70,52 @@ Returns `200` after successful completion:
       "state": "open",
       "service": "ssh",
       "product": null,
-      "version": null
+      "version": null,
+      "detection_method": "probed",
+      "service_confidence": 10
     }
   ]
 }
 ```
 
 Queued, running, and failed scans return `409`; unknown IDs return `404`.
+
+## `GET /api/scans/{scan_id}/findings`
+
+Returns `200` after successful completion. Findings are generated from the
+stored parsed scan result by transparent rules. An open port alone is never a
+finding. A service name inferred from Nmap's port table (`method="table"`),
+an ambiguous/unsupported method, or missing/invalid confidence produces no
+service finding. Findings require an actively probed service with confidence
+at least 7/10.
+
+```json
+{
+  "scan_id": "uuid",
+  "target": "127.0.0.1",
+  "profile": "basic_tcp",
+  "status": "completed",
+  "findings": [
+    {
+      "rule_id": "service.telnet-exposed",
+      "title": "Open Telnet service observed",
+      "severity": "high",
+      "description": "Nmap actively probed and identified an open Telnet service.",
+      "evidence": "Open tcp/23; Nmap actively probed service name: telnet; network exposure context was not established.",
+      "risk_explanation": "Telnet commonly transmits credentials and session data without transport encryption.",
+      "recommended_remediation": "Disable Telnet or replace it with an approved encrypted remote-access protocol.",
+      "confidence": "high",
+      "verification_status": "requires_verification"
+    }
+  ]
+}
+```
+
+An empty `findings` list means no implemented rule matched the available
+evidence; it does not prove that the target is secure. Findings describe
+observations on the scanned target and do not establish external exposure or
+prove a vulnerability. Queued, running, and failed scans return `409`;
+unknown IDs return `404`.
 
 ## Development server
 

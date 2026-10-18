@@ -17,6 +17,8 @@ class ServiceMetadata:
     name: str | None = None
     product: str | None = None
     version: str | None = None
+    detection_method: str | None = None
+    confidence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +115,8 @@ def _parse_port(port_element: ElementTree.Element) -> PortResult | None:
         name=_attribute(service_element, "name"),
         product=_attribute(service_element, "product"),
         version=_attribute(service_element, "version"),
+        detection_method=_detection_method(service_element),
+        confidence=_confidence(service_element),
     )
     return PortResult(
         port=port_number,
@@ -127,3 +131,19 @@ def _attribute(element: ElementTree.Element | None, name: str) -> str | None:
         return None
     value = element.get(name)
     return value if value else None
+
+
+def _detection_method(element: ElementTree.Element | None) -> str | None:
+    method = _attribute(element, "method")
+    return method if method in {"table", "probed"} else None
+
+
+def _confidence(element: ElementTree.Element | None) -> int | None:
+    value = _attribute(element, "conf")
+    if value is None:
+        return None
+    try:
+        confidence = int(value)
+    except ValueError:
+        return None
+    return confidence if 0 <= confidence <= 10 else None

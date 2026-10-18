@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from backend.app.config import Settings
 from backend.app.schemas.scan import (
     ScanCreateRequest,
+    ScanFindingsResponse,
     ScanPortsResponse,
     ScanResponse,
 )
@@ -65,6 +66,22 @@ def get_scan_ports(
 ) -> ScanPortsResponse:
     try:
         return manager.get_ports(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found.") from exc
+    except ScanNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Scan is not complete; current status is {exc}.",
+        ) from exc
+
+
+@router.get("/{scan_id}/findings", response_model=ScanFindingsResponse)
+def get_scan_findings(
+    scan_id: str,
+    manager: ScanManager = Depends(get_scan_manager),
+) -> ScanFindingsResponse:
+    try:
+        return manager.get_findings(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found.") from exc
     except ScanNotReadyError as exc:

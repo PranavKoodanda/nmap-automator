@@ -72,6 +72,47 @@ def test_create_complete_and_get_ports() -> None:
         ports = client.get(f"/api/scans/{scan['scan_id']}/ports")
         assert ports.status_code == 200
         assert ports.json()["ports"][0]["service"] == "ssh"
+        findings = client.get(f"/api/scans/{scan['scan_id']}/findings")
+        assert findings.status_code == 200
+        assert findings.json()["findings"] == []
+    finally:
+        manager.shutdown()
+
+
+def test_findings_endpoint_returns_rule_evidence() -> None:
+    telnet_result = execution_result()
+    telnet_result = ScanExecutionResult(
+        target=telnet_result.target,
+        profile=telnet_result.profile,
+        scan=ScanResult(
+            target=telnet_result.scan.target,
+            ports=(
+                PortResult(
+                    port=23,
+                    protocol="tcp",
+                    state="open",
+                    service=ServiceMetadata(name="telnet", detection_method="probed", confidence=10),
+                ),
+            ),
+        ),
+        stderr=telnet_result.stderr,
+        returncode=telnet_result.returncode,
+    )
+    client, manager = client_for(Mock(return_value=telnet_result))
+    try:
+        created = client.post(
+            "/api/scans",
+            json={"target": "127.0.0.1", "profile": "basic_tcp"},
+        ).json()
+        completed = wait_for_status(client, created["scan_id"], "completed")
+        response = client.get(f"/api/scans/{completed['scan_id']}/findings")
+
+        assert response.status_code == 200
+        finding = response.json()["findings"][0]
+        assert finding["rule_id"] == "service.telnet-exposed"
+        assert finding["severity"] == "high"
+        assert finding["verification_status"] == "requires_verification"
+        assert "tcp/23" in finding["evidence"]
     finally:
         manager.shutdown()
 
@@ -94,6 +135,7 @@ def test_failure_and_unknown_scan_responses() -> None:
         failed = wait_for_status(client, created["scan_id"], "failed")
         assert failed["error"] == "execution timed out"
         assert client.get(f"/api/scans/{created['scan_id']}/ports").status_code == 409
+        assert client.get(f"/api/scans/{created['scan_id']}/findings").status_code == 409
         assert client.get("/api/scans/missing").status_code == 404
     finally:
         manager.shutdown()

@@ -1,14 +1,17 @@
 """Bounded in-memory scan lifecycle management."""
 
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import threading
 from uuid import uuid4
 
+from backend.app.analyzer.rules import SecurityFinding, analyze_scan
 from backend.app.schemas.scan import (
+    FindingResponse,
     PortResponse,
+    ScanFindingsResponse,
     ScanPortsResponse,
     ScanResponse,
     ScanStatus,
@@ -43,6 +46,7 @@ class _ScanRecord:
     completed_at: datetime | None = None
     result: ScanExecutionResult | None = None
     error: str | None = None
+    findings: tuple[SecurityFinding, ...] = ()
 
 
 class ScanManager:
@@ -109,6 +113,8 @@ class ScanManager:
                     service=port.service.name,
                     product=port.service.product,
                     version=port.service.version,
+                    detection_method=port.service.detection_method,
+                    service_confidence=port.service.confidence,
                 )
                 for port in result.scan.ports
             ]
@@ -118,6 +124,34 @@ class ScanManager:
                 profile=record.profile,
                 status=record.status,
                 ports=ports,
+            )
+
+    def get_findings(self, scan_id: str) -> ScanFindingsResponse:
+        with self._lock:
+            record = self._records.get(scan_id)
+            if record is None:
+                raise ScanNotFoundError(scan_id)
+            if record.status is not ScanStatus.COMPLETED or record.result is None:
+                raise ScanNotReadyError(record.status.value)
+            return ScanFindingsResponse(
+                scan_id=record.scan_id,
+                target=record.target,
+                profile=record.profile,
+                status=record.status,
+                findings=[
+                    FindingResponse(
+                        rule_id=finding.rule_id,
+                        title=finding.title,
+                        severity=finding.severity,
+                        description=finding.description,
+                        evidence=finding.evidence,
+                        risk_explanation=finding.risk_explanation,
+                        recommended_remediation=finding.recommended_remediation,
+                        confidence=finding.confidence,
+                        verification_status=finding.verification_status,
+                    )
+                    for finding in record.findings
+                ],
             )
 
     def shutdown(self) -> None:
@@ -139,6 +173,7 @@ class ScanManager:
                 record.status = ScanStatus.COMPLETED
                 record.completed_at = datetime.now(timezone.utc)
                 record.result = result
+                record.findings = analyze_scan(result)
         finally:
             self._capacity.release()
 

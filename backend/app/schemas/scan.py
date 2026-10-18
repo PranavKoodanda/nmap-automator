@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.scanner.profiles import ScanProfile
 from backend.app.scanner.validation import TargetValidationError, validate_target
+from backend.app.analyzer.rules import FindingSeverity, VerificationStatus
 
 
 class ScanStatus(StrEnum):
@@ -37,6 +38,8 @@ class PortResponse(BaseModel):
     service: str | None
     product: str | None
     version: str | None
+    detection_method: str | None
+    service_confidence: int | None
 
 
 class ScanSummary(BaseModel):
@@ -64,3 +67,23 @@ class ScanPortsResponse(BaseModel):
     profile: ScanProfile
     status: ScanStatus
     ports: list[PortResponse]
+
+
+class FindingResponse(BaseModel):
+    rule_id: str
+    title: str
+    severity: FindingSeverity
+    description: str
+    evidence: str
+    risk_explanation: str
+    recommended_remediation: str
+    confidence: str
+    verification_status: VerificationStatus
+
+
+class ScanFindingsResponse(BaseModel):
+    scan_id: str
+    target: str
+    profile: ScanProfile
+    status: ScanStatus
+    findings: list[FindingResponse]

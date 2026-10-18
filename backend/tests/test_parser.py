@@ -11,7 +11,7 @@ XML = """\
     <ports>
       <port protocol="tcp" portid="22">
         <state state="open"/>
-        <service name="ssh" product="OpenSSH" version="9.6"/>
+        <service name="ssh" product="OpenSSH" version="9.6" method="probed" conf="10"/>
       </port>
       <port protocol="tcp" portid="80">
         <state state="closed"/>
@@ -38,8 +38,26 @@ def test_parser_normalizes_port_states_and_service_metadata() -> None:
     assert result.ports[0].service.name == "ssh"
     assert result.ports[0].service.product == "OpenSSH"
     assert result.ports[0].service.version == "9.6"
+    assert result.ports[0].service.detection_method == "probed"
+    assert result.ports[0].service.confidence == 10
     assert result.ports[1].service.product is None
     assert result.ports[2].service.name is None
+
+
+def test_parser_preserves_table_inference_and_rejects_invalid_metadata() -> None:
+    result = parse_nmap_xml(
+        "<nmaprun><host><ports>"
+        "<port protocol='tcp' portid='23'><state state='open'/>"
+        "<service name='telnet' method='table' conf='3'/></port>"
+        "<port protocol='tcp' portid='21'><state state='open'/>"
+        "<service name='ftp' method='mystery' conf='not-a-number'/></port>"
+        "</ports></host></nmaprun>"
+    )
+
+    assert result.ports[0].service.detection_method == "table"
+    assert result.ports[0].service.confidence == 3
+    assert result.ports[1].service.detection_method is None
+    assert result.ports[1].service.confidence is None
 
 
 def test_parser_preserves_unknown_state_as_unavailable() -> None:
