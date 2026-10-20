@@ -1,0 +1,33 @@
+:root {
+  font-family: 'Segoe UI', sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #24434d;
+  background-color: #f2f6f5;
+  background-image:
+    linear-gradient(rgba(36, 91, 96, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(36, 91, 96, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid #e3a84e;
+  outline-offset: 3px;
+}
