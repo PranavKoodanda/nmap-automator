@@ -14,6 +14,7 @@ class ScanStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class ScanCreateRequest(BaseModel):
@@ -50,15 +51,41 @@ class ScanSummary(BaseModel):
     unavailable_state_ports: int
 
 
+class ScanProgress(BaseModel):
+    stage: str | None = None
+    percent: float | None = Field(default=None, ge=0, le=100)
+    elapsed_seconds: float = Field(ge=0)
+    estimated_remaining_seconds: float | None = Field(default=None, ge=0)
+    last_update_at: datetime | None = None
+    message: str | None = None
+
+
+class ScanEventResponse(BaseModel):
+    sequence: int
+    timestamp: datetime
+    event_type: str
+    message: str
+
+
+class ScanEventsResponse(BaseModel):
+    scan_id: str
+    events: list[ScanEventResponse]
+    next_sequence: int
+
+
 class ScanResponse(BaseModel):
     scan_id: str
     target: str
     profile: ScanProfile
     status: ScanStatus
     created_at: datetime
+    started_at: datetime | None = None
     completed_at: datetime | None = None
     summary: ScanSummary | None = None
     error: str | None = None
+    progress: ScanProgress = Field(
+        default_factory=lambda: ScanProgress(elapsed_seconds=0.0)
+    )
 
 
 class ScanPortsResponse(BaseModel):

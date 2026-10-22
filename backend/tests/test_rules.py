@@ -104,3 +104,20 @@ def test_inferred_or_ambiguous_services_do_not_create_findings() -> None:
     )
 
     assert findings == ()
+
+
+def test_udp_services_are_not_evaluated_by_tcp_service_rules() -> None:
+    findings = analyze_scan(
+        execution(
+            (
+                PortResult(
+                    23,
+                    "udp",
+                    "open",
+                    ServiceMetadata(name="telnet", detection_method="probed", confidence=10),
+                ),
+            )
+        )
+    )
+
+    assert findings == ()

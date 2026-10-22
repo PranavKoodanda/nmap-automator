@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from dataclasses import replace
 
 from backend.app.reports.html_report import ReportData, generate_html_report
 from backend.app.schemas.scan import (
@@ -13,20 +14,25 @@ from backend.app.schemas.scan import (
 from backend.app.scanner.profiles import ScanProfile
 
 
+_DEFAULT_COMPLETION = object()
+
+
 def report_data(
     *,
     target: str = "192.0.2.10",
     findings: list[FindingResponse] | None = None,
     ports: list[PortResponse] | None = None,
+    created_at: datetime | None = None,
+    completed_at: datetime | None | object = _DEFAULT_COMPLETION,
 ) -> ReportData:
-    created = datetime(2026, 10, 18, tzinfo=timezone.utc)
+    created = created_at or datetime(2026, 10, 18, tzinfo=timezone.utc)
     scan = ScanResponse(
         scan_id="scan-123",
         target=target,
         profile=ScanProfile.SERVICE_DETECTION,
         status=ScanStatus.COMPLETED,
         created_at=created,
-        completed_at=created,
+        completed_at=created if completed_at is _DEFAULT_COMPLETION else completed_at,
         summary=ScanSummary(
             reported_ports=2,
             open_ports=1,
@@ -93,6 +99,15 @@ def test_report_renders_metrics_ports_findings_and_limitations() -> None:
     )
 
     assert "Security Assessment Report" in report
+    assert "Nmap Automator" in report
+    assert "192.0.2.10" in report
+    assert "Service detection scan" in report
+    assert "status-completed" in report
+    assert "Completed" in report
+    assert "18 Oct 2026, 00:00:00 UTC" in report
+    assert "Scan duration" in report
+    assert "0s" in report
+    assert "Scan ID" in report
     assert "Reported ports: 2" in report
     assert "Open: 1" in report
     assert "Closed: 1" in report
@@ -131,3 +146,22 @@ def test_report_escapes_untrusted_text_and_handles_no_findings() -> None:
     assert "<img" not in report
     assert "No rule-based findings were generated." in report
     assert "does not prove that the target is secure" in report
+
+
+def test_report_header_handles_missing_completion_without_inventing_duration() -> None:
+    data = report_data(
+        created_at=datetime(2026, 10, 18, 10, 15, tzinfo=timezone.utc),
+    )
+    data = replace(
+        data,
+        scan=data.scan.model_copy(update={"completed_at": None}),
+    )
+    report = generate_html_report(
+        data,
+        generated_at=datetime(2026, 10, 18, 12, tzinfo=timezone.utc),
+    )
+
+    assert "Scan duration</div><div class=\"metadata-value\">Unavailable" in report
+    assert "Completion</div><div class=\"metadata-value\">Unavailable" in report
+    assert "18 Oct 2026, 10:15:00 UTC" in report
+    assert "18 Oct 2026, 12:00:00 UTC" in report

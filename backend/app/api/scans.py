@@ -1,14 +1,19 @@
 """Scan API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from backend.app.config import Settings
-from backend.app.reports.html_report import generate_html_report, safe_report_filename
+from backend.app.reports.html_report import (
+    generate_html_report,
+    generate_json_report,
+    generate_pdf_report,
+    safe_report_filename_for,
+)
 from backend.app.schemas.scan import (
     ScanCreateRequest,
     ScanFindingsResponse,
     ScanPortsResponse,
     ScanResponse,
+    ScanEventsResponse,
 )
 from backend.app.services.scan_manager import (
     ScanCapacityError,
@@ -21,28 +26,18 @@ from backend.app.services.scan_manager import (
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
 
-def get_settings() -> Settings:
-    return Settings.from_environment()
-
-
 def get_scan_manager() -> ScanManager:
     return _manager
 
 
-_manager = ScanManager()
+_manager = ScanManager.from_environment()
 
 
 @router.post("", response_model=ScanResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_scan(
     request: ScanCreateRequest,
-    settings: Settings = Depends(get_settings),
     manager: ScanManager = Depends(get_scan_manager),
 ) -> ScanResponse:
-    if not settings.is_target_authorized(request.target):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Target is outside the configured scan authorization policy.",
-        )
     try:
         return manager.submit(request.target, request.profile)
     except ScanCapacityError as exc:
@@ -56,6 +51,17 @@ def get_scan(
 ) -> ScanResponse:
     try:
         return manager.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found.") from exc
+
+
+@router.post("/{scan_id}/stop", response_model=ScanResponse)
+def stop_scan(
+    scan_id: str,
+    manager: ScanManager = Depends(get_scan_manager),
+) -> ScanResponse:
+    try:
+        return manager.stop(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found.") from exc
 
@@ -74,6 +80,18 @@ def get_scan_ports(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Scan is not complete; current status is {exc}.",
         ) from exc
+
+
+@router.get("/{scan_id}/events", response_model=ScanEventsResponse)
+def get_scan_events(
+    scan_id: str,
+    after: int = Query(default=0, ge=0),
+    manager: ScanManager = Depends(get_scan_manager),
+):
+    try:
+        return manager.get_events(scan_id, after)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Scan not found.") from exc
 
 
 @router.get("/{scan_id}/findings", response_model=ScanFindingsResponse)
@@ -95,6 +113,7 @@ def get_scan_findings(
 @router.get("/{scan_id}/report", response_class=Response)
 def get_scan_report(
     scan_id: str,
+    format: str = Query(default="html"),
     manager: ScanManager = Depends(get_scan_manager),
 ) -> Response:
     try:
@@ -106,12 +125,24 @@ def get_scan_report(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Scan is not complete; current status is {exc}.",
         ) from exc
+    generators = {
+        "html": (generate_html_report, "text/html", "html"),
+        "json": (generate_json_report, "application/json", "json"),
+        "pdf": (generate_pdf_report, "application/pdf", "pdf"),
+    }
+    generator_info = generators.get(format.lower())
+    if generator_info is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported report format. Use html, json, or pdf.",
+        )
+    generator, media_type, extension = generator_info
     return Response(
-        content=generate_html_report(report_data),
-        media_type="text/html",
+        content=generator(report_data),
+        media_type=media_type,
         headers={
             "Content-Disposition": (
-                f'attachment; filename="{safe_report_filename(report_data.scan.scan_id)}"'
+                f'attachment; filename="{safe_report_filename_for(report_data.scan.scan_id, extension)}"'
             )
         },
     )

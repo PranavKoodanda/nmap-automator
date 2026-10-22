@@ -41,7 +41,9 @@ class ScanResult:
 
 _EXTERNAL_DTD = re.compile(rb"<!DOCTYPE\s+[^>]*(?:SYSTEM|PUBLIC)", re.IGNORECASE)
 _UNSAFE_XML_MARKERS: Final[tuple[bytes, ...]] = (b"<!ENTITY",)
-_PORT_STATES: Final[frozenset[str]] = frozenset({"open", "closed", "filtered"})
+_PORT_STATES: Final[frozenset[str]] = frozenset(
+    {"open", "closed", "filtered", "open|filtered"}
+)
 
 
 def parse_nmap_xml(xml_data: str | bytes) -> ScanResult:

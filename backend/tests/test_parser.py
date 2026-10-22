@@ -60,13 +60,13 @@ def test_parser_preserves_table_inference_and_rejects_invalid_metadata() -> None
     assert result.ports[1].service.confidence is None
 
 
-def test_parser_preserves_unknown_state_as_unavailable() -> None:
+def test_parser_preserves_open_or_filtered_state_as_reported() -> None:
     result = parse_nmap_xml(
         "<nmaprun><host><ports><port protocol='tcp' portid='1'>"
         "<state state='open|filtered'/></port></ports></host></nmaprun>"
     )
 
-    assert result.ports[0].state is None
+    assert result.ports[0].state == "open|filtered"
 
 
 @pytest.mark.parametrize(

@@ -43,7 +43,8 @@ def analyze_scan(result: ScanExecutionResult) -> tuple[SecurityFinding, ...]:
     findings: list[SecurityFinding] = []
     for port in result.scan.ports:
         if (
-            port.state != "open"
+            port.protocol.lower() != "tcp"
+            or port.state != "open"
             or not port.service.name
             or port.service.detection_method != "probed"
             or port.service.confidence is None
