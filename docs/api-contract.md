@@ -1,11 +1,22 @@
 # Nmap Automator API contract
 
-The API validates target syntax but does not apply an application-level target
-allowlist. Operators must only scan systems they own or are explicitly
+The API validates target syntax and applies `SCAN_TARGET_ALLOWLIST` when set;
+production requires this comma-separated allowlist and rejects all other
+targets. Operators must only scan systems they own or are explicitly
 authorized to assess. Nmap execution remains restricted to fixed profiles,
 shell-free argument lists, timeouts, and bounded queue capacity. CORS origins
 are configured through `FRONTEND_CORS_ORIGINS` and default to
 `http://localhost:5173`. CORS is not an authorization mechanism.
+
+`POST /api/auth/login` accepts `{"password":"..."}` and returns a signed,
+expiring bearer token. Set `APP_ACCESS_PASSWORD` and `APP_AUTH_SECRET` only in
+the backend environment. Every `/api/scans` endpoint requires
+`Authorization: Bearer <token>`. Login attempts are rate limited. `GET /health`
+is public and intended for health checks. Production (`APP_ENV=production`)
+requires a non-placeholder password of at least 12 characters, a high-entropy
+signing secret of at least 32 characters, explicit HTTPS frontend origins, and
+a non-empty target allowlist. CORS is not authentication. Login throttling is
+bounded and process-local; it is not shared between backend instances.
 
 Scans and their history are stored in memory only and disappear when the
 process restarts. Work is bounded by the in-memory manager and returns

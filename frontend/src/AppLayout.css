@@ -266,3 +266,9 @@
   .report-controls .download-link { width: 100%; }
   .report-metadata { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.auth-card { width: min(100%, 420px); display: grid; gap: 14px; padding: 32px; background: #fff; border: 1px solid #dce7e5; border-radius: 16px; box-shadow: 0 18px 50px #24434d18; }
+.auth-card h1, .auth-card p { margin: 0; }
+.auth-card input { width: 100%; padding: 12px; border: 1px solid #aebfbc; border-radius: 8px; font: inherit; }
+.auth-card button { padding: 12px; border: 0; border-radius: 8px; background: #176b68; color: #fff; font: inherit; cursor: pointer; }
+.auth-card button:disabled { opacity: .65; cursor: wait; }
