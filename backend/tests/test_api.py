@@ -1,16 +1,24 @@
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import json
+import os
+import secrets
 import subprocess
 import sys
 import threading
 import time
 from unittest.mock import Mock
 
+os.environ.setdefault("APP_ACCESS_PASSWORD", "test-access-password")
+os.environ["APP_AUTH_SECRET"] = secrets.token_urlsafe(32)
+
 from fastapi.testclient import TestClient
 
-from backend.app.main import create_app
+from backend.app import auth as auth_module
+from backend.app.auth import issue_token, validate_token
 from backend.app.api.scans import get_scan_manager
+from backend.app.config import Settings
+from backend.app.main import create_app
 from backend.app.schemas.scan import ScanStatus
 from backend.app.scanner.engine import (
     NmapTimeoutError,
@@ -44,6 +52,13 @@ def execution_result(target: str = "127.0.0.1") -> ScanExecutionResult:
     )
 
 
+class AuthenticatedTestClient(TestClient):
+    def request(self, method, url, **kwargs):
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("Authorization", f"Bearer {issue_token(Settings.from_environment())}")
+        return super().request(method, url, headers=headers, **kwargs)
+
+
 def client_for(scanner=None, *, max_pending: int = 4) -> tuple[TestClient, ScanManager]:
     manager = ScanManager(
         scanner=scanner or Mock(return_value=execution_result()),
@@ -52,7 +67,91 @@ def client_for(scanner=None, *, max_pending: int = 4) -> tuple[TestClient, ScanM
     )
     app = create_app()
     app.dependency_overrides[get_scan_manager] = lambda: manager
-    return TestClient(app), manager
+    return AuthenticatedTestClient(app), manager
+
+
+def test_auth_login_expiry_rate_limit_and_unauthorized_scan_routes() -> None:
+    app = create_app()
+    client = TestClient(app)
+    assert client.get("/health").status_code == 200
+    blocked = client.get("/api/scans/missing")
+    assert blocked.status_code == 401
+    protected_requests = [
+        client.post("/api/scans", json={"target": "127.0.0.1", "profile": "basic_tcp"}),
+        client.get("/api/scans/missing/events"),
+        client.get("/api/scans/missing/ports"),
+        client.get("/api/scans/missing/findings"),
+        client.get("/api/scans/missing/report"),
+        client.post("/api/scans/missing/stop"),
+    ]
+    assert all(response.status_code == 401 for response in protected_requests)
+    login = client.post("/api/auth/login", json={"password": "test-access-password"})
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    settings = Settings.from_environment()
+    assert validate_token(token, settings)
+    assert not validate_token(issue_token(settings, now=100), settings, now=100 + settings.auth_token_ttl_seconds)
+    assert not validate_token(token + "x", settings)
+    assert client.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
+    for _ in range(settings.login_attempt_limit - 2):
+        client.post("/api/auth/login", json={"password": "wrong"})
+    assert client.post("/api/auth/login", json={"password": "test-access-password"}).status_code == 429
+
+
+def test_production_requires_allowlisted_targets(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "a-valid-test-password-for-production")
+    monkeypatch.setenv("APP_AUTH_SECRET", secrets.token_urlsafe(48))
+    monkeypatch.setenv("FRONTEND_CORS_ORIGINS", "https://example.test")
+    monkeypatch.setenv("SCAN_TARGET_ALLOWLIST", "authorized.example")
+    client, manager = client_for()
+    try:
+        denied = client.post("/api/scans", json={"target": "other.example", "profile": "basic_tcp"})
+        assert denied.status_code == 403
+        accepted = client.post("/api/scans", json={"target": "authorized.example", "profile": "basic_tcp"})
+        assert accepted.status_code == 202
+    finally:
+        manager.shutdown()
+
+
+def test_login_rate_limit_expires_and_cleans_old_client_entries(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_next_cleanup_at", 0.0)
+    assert auth_module._record_login_attempt("192.0.2.1", 10, 2, 300)
+    assert auth_module._record_login_attempt("192.0.2.1", 11, 2, 300)
+    assert not auth_module._record_login_attempt("192.0.2.1", 12, 2, 300)
+    assert auth_module._record_login_attempt("192.0.2.2", 400, 2, 300)
+    assert "192.0.2.1" not in auth_module._attempts
+
+
+def test_login_rate_limiter_evicts_safely_at_hard_client_limit(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_next_cleanup_at", float("inf"))
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_LOGIN_CLIENTS", 32)
+    for index in range(32):
+        assert auth_module._record_login_attempt(f"198.51.100.{index}", index + 1, 5, 300)
+    assert not auth_module._record_login_attempt("198.51.100.32", 40, 5, 300)
+    assert len(auth_module._attempts) == 32
+    assert "198.51.100.0" in auth_module._attempts
+    assert "198.51.100.32" not in auth_module._attempts
+    assert auth_module._record_login_attempt("198.51.100.32", 400, 5, 300)
+    assert len(auth_module._attempts) == 1
+
+
+def test_concurrent_login_attempts_keep_limiter_state_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_next_cleanup_at", float("inf"))
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_LOGIN_CLIENTS", 64)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        outcomes = list(pool.map(
+            lambda index: auth_module._record_login_attempt(
+                f"203.0.113.{index}", 1000, 5, 300
+            ),
+            range(256),
+        ))
+    assert sum(outcomes) == 64
+    assert len(auth_module._attempts) == 64
+    assert all(len(history) == 1 for history in auth_module._attempts.values())
 
 
 def wait_for_status(client: TestClient, scan_id: str, status: str) -> dict:
@@ -247,7 +346,7 @@ def test_concurrent_scan_events_are_isolated_and_ordered() -> None:
     manager = ScanManager(scanner=scanner, max_workers=2, max_pending=2)
     app = create_app()
     app.dependency_overrides[get_scan_manager] = lambda: manager
-    client = TestClient(app)
+    client = AuthenticatedTestClient(app)
     try:
         first = client.post(
             "/api/scans",
@@ -428,7 +527,7 @@ def test_scan_events_use_cursor_and_are_bounded() -> None:
     )
     app = create_app()
     app.dependency_overrides[get_scan_manager] = lambda: manager
-    client = TestClient(app)
+    client = AuthenticatedTestClient(app)
     try:
         created = client.post(
             "/api/scans",
@@ -569,7 +668,7 @@ def test_progress_updates_are_exposed_while_scan_is_running() -> None:
     manager = ScanManager(scanner=scanner, max_workers=1, max_pending=2)
     app = create_app()
     app.dependency_overrides[get_scan_manager] = lambda: manager
-    client = TestClient(app)
+    client = AuthenticatedTestClient(app)
     try:
         created = client.post(
             "/api/scans",
@@ -623,7 +722,7 @@ def test_api_progress_can_change_from_indeterminate_to_percentage() -> None:
     manager = ScanManager(scanner=scanner, max_workers=1, max_pending=1)
     app = create_app()
     app.dependency_overrides[get_scan_manager] = lambda: manager
-    client = TestClient(app)
+    client = AuthenticatedTestClient(app)
     try:
         created = client.post(
             "/api/scans",
@@ -656,7 +755,7 @@ def test_running_elapsed_time_is_live_and_queued_elapsed_is_zero() -> None:
     manager = ScanManager(scanner=scanner, max_workers=1, max_pending=2)
     created_app = create_app()
     created_app.dependency_overrides[get_scan_manager] = lambda: manager
-    client = TestClient(created_app)
+    client = AuthenticatedTestClient(created_app)
     try:
         first = client.post(
             "/api/scans",

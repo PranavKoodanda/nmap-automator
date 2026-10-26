@@ -21,9 +21,12 @@ from backend.app.services.scan_manager import (
     ScanNotFoundError,
     ScanNotReadyError,
 )
+from backend.app.auth import require_auth
+from backend.app.config import Settings
+from backend.app.scanner.validation import validate_target
 
 
-router = APIRouter(prefix="/api/scans", tags=["scans"])
+router = APIRouter(prefix="/api/scans", tags=["scans"], dependencies=[Depends(require_auth)])
 
 
 def get_scan_manager() -> ScanManager:
@@ -38,8 +41,15 @@ def create_scan(
     request: ScanCreateRequest,
     manager: ScanManager = Depends(get_scan_manager),
 ) -> ScanResponse:
+    settings = Settings.from_environment()
+    normalized_target = validate_target(request.target)
+    allowed = {validate_target(item) for item in settings.scan_target_allowlist}
+    if settings.app_env == "production" and normalized_target not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Target is not in SCAN_TARGET_ALLOWLIST.")
+    if settings.scan_target_allowlist and normalized_target not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Target is not in SCAN_TARGET_ALLOWLIST.")
     try:
-        return manager.submit(request.target, request.profile)
+        return manager.submit(normalized_target, request.profile)
     except ScanCapacityError as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
 

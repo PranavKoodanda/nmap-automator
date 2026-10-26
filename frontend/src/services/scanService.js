@@ -10,6 +10,7 @@ const REAL_STORAGE_KEY = 'nmap-automator.real-scan-ids.v1'
 const DEMO_STORAGE_KEY = 'nmap-automator.demo-scans.v1'
 const POLL_INTERVAL_MS = 1000
 const POLL_TIMEOUT_MS = 35 * 60 * 1000
+const TOKEN_KEY = 'nmap-automator.access-token.v1'
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -52,15 +53,20 @@ function writeRealScanIds(ids) {
 async function request(path, options = {}) {
   let response
   try {
+    const token = window.sessionStorage.getItem(TOKEN_KEY)
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
-      headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
+      headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
     })
   } catch {
     throw new ApiError('The backend could not be reached. Start the API server and try again.')
   }
 
   if (!response.ok) {
+    if (response.status === 401 && path !== '/api/auth/login') {
+      window.sessionStorage.removeItem(TOKEN_KEY)
+      window.dispatchEvent(new Event('nmap-auth-expired'))
+    }
     let detail = `Backend request failed (${response.status}).`
     try {
       const body = await response.json()
@@ -71,6 +77,20 @@ async function request(path, options = {}) {
     throw new ApiError(detail, response.status)
   }
   return response
+}
+
+export function hasSessionToken() {
+  return Boolean(window.sessionStorage.getItem(TOKEN_KEY))
+}
+
+export async function login(password) {
+  const response = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) })
+  const payload = await response.json()
+  window.sessionStorage.setItem(TOKEN_KEY, payload.access_token)
+}
+
+export function logout() {
+  window.sessionStorage.removeItem(TOKEN_KEY)
 }
 
 function adaptPort(port) {

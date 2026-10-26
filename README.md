@@ -4,12 +4,17 @@ A Python-based network security assessment tool that automates Nmap scanning, id
 ## Local development
 
 The backend validates target syntax, uses only fixed scan profiles, and executes
-Nmap without a shell. It does not apply an application-level target allowlist;
-scan only systems you own or are explicitly authorized to assess. Keep the API
-bound to loopback during development.
+Nmap without a shell. All scan endpoints require a password-issued bearer token.
+Configure `APP_ACCESS_PASSWORD` and `APP_AUTH_SECRET` on the backend; the frontend
+stores its short-lived token in session storage. `SCAN_TARGET_ALLOWLIST` can
+restrict targets locally and is required in production. Only scan systems you
+own or are explicitly authorized to assess. Keep the API bound to loopback
+during development.
 
 ```powershell
 $env:PYTHONPATH = "E:\Projects\nmap"
+$env:APP_ACCESS_PASSWORD = "your-private-local-password"
+$env:APP_AUTH_SECRET = "your-private-local-random-secret-at-least-32-bytes"
 python -m pip install -r backend\requirements.txt
 uvicorn backend.app.main:app --host 127.0.0.1 --port 8001
 ```
@@ -25,6 +30,31 @@ npm run dev
 The frontend uses live API mode by default. Copy `frontend\.env.example` to
 `frontend\.env.local` to configure the API URL. Set `VITE_API_MODE=demo` only
 when explicitly previewing demonstration data.
+
+## Render deployment
+
+Deploy the repository's `Dockerfile` as a Render web service. Set backend
+environment variables in the Render dashboard: `APP_ENV=production`,
+`APP_ACCESS_PASSWORD` (a unique password of at least 12 characters),
+`APP_AUTH_SECRET` (at least 32 random bytes), `FRONTEND_CORS_ORIGINS` (one or
+more explicit HTTPS frontend origins; wildcards are rejected), and
+`SCAN_TARGET_ALLOWLIST` (comma-separated IP addresses or hostnames you are
+explicitly authorized to assess). Production startup fails closed if any
+required setting is missing. Keep secrets out of the repository and all
+`VITE_` variables. Configure the frontend's
+`VITE_API_BASE_URL` to the backend URL at build time; it contains no secret.
+`/health` remains available without a token for platform health checks.
+
+Generate private production values locally with Python, then enter the output
+directly in Render's backend environment settings (do not commit it):
+
+```powershell
+python -c "import secrets; print('APP_ACCESS_PASSWORD=' + secrets.token_urlsafe(24)); print('APP_AUTH_SECRET=' + secrets.token_urlsafe(48))"
+```
+
+The login-attempt limiter is process-local and its memory is bounded. Each
+backend instance enforces its own limit; attempts are not shared across
+instances, so this is not distributed rate limiting.
 
 Completed scans support HTML, JSON, and PDF downloads through
 `GET /api/scans/{scan_id}/report?format=html|json|pdf`. PDF generation uses
