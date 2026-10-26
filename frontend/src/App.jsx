@@ -16,6 +16,10 @@ import {
 } from './services/scanService'
 import './AppLayout.css'
 
+const HOSTED_SCAN_PROFILES = SCAN_PROFILES.filter(
+  (profile) => !['udp_top_100', 'tcp_udp_common'].includes(profile.id),
+)
+
 function App() {
   const [page, setPage] = useState('dashboard')
   const [scans, setScans] = useState([])
@@ -171,7 +175,7 @@ function App() {
         <Dashboard scans={scans} onOpenActivity={openActivity} onStopScan={handleStopScan} onNavigate={setPage} demoMode={demoMode} />
       ) : page === 'start-scan' ? (
         <StartScan
-          profiles={SCAN_PROFILES}
+          profiles={import.meta.env.PROD ? HOSTED_SCAN_PROFILES : SCAN_PROFILES}
           activeScan={activeScan}
           error={scanError}
           onStartScan={handleStartScan}

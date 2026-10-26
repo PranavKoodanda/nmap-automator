@@ -104,6 +104,11 @@ def available_profiles() -> tuple[ProfileDefinition, ...]:
     return tuple(_PROFILES.values())
 
 
+def requires_raw_sockets(profile: ScanProfile) -> bool:
+    """Whether a fixed profile includes UDP scanning, which needs raw sockets."""
+    return "-sU" in get_profile(profile).arguments
+
+
 def get_profile_timeout(profile: ScanProfile) -> float:
     """Return a bounded, optionally overridden timeout for one profile."""
 

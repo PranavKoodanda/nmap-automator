@@ -87,11 +87,15 @@ def test_run_scan_builds_fixed_arguments_and_parses_xml(
     assert result.scan.ports[0].port == 22
     run.assert_called_once()
     command = run.call_args.args[0]
-    assert command[: len(profile_arguments) + 1] == [
+    assert command[: len(profile_arguments) + 2] == [
         "C:\\Nmap\\nmap.exe",
         *profile_arguments,
+        "-Pn",
     ]
-    assert command[len(profile_arguments) + 1:] == [
+    assert command.count("-Pn") == 1
+    if "-sU" not in profile_arguments:
+        assert "-sT" in command
+    assert command[len(profile_arguments) + 2:] == [
         "-v",
         "--stats-every",
         "5s",
@@ -110,6 +114,51 @@ def test_run_scan_builds_fixed_arguments_and_parses_xml(
         "text": True,
         "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     }
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [ScanProfile.QUICK_TCP, ScanProfile.BASIC_TCP, ScanProfile.FULL_TCP,
+     ScanProfile.SERVICE_DETECTION, ScanProfile.COMPREHENSIVE_TCP],
+)
+def test_tcp_profiles_use_connect_scan_and_skip_raw_socket_host_discovery(profile):
+    process = completed_process()
+    with (
+        patch("backend.app.scanner.engine.shutil.which", return_value="nmap"),
+        patch("backend.app.scanner.engine.subprocess.Popen", return_value=process) as run,
+    ):
+        run_scan("example.com", profile, timeout_seconds=30)
+
+    arguments = run.call_args.args[0]
+    assert "-sT" in arguments
+    assert "-Pn" in arguments
+    assert arguments.count("-Pn") == 1
+
+
+def test_raw_socket_permission_failure_has_user_friendly_udp_guidance():
+    process = completed_process(
+        stdout="",
+        stderr="Couldn't open a raw socket. Error: Operation not permitted (1)\n",
+        returncode=1,
+    )
+    with (
+        patch("backend.app.scanner.engine.shutil.which", return_value="nmap"),
+        patch("backend.app.scanner.engine.subprocess.Popen", return_value=process),
+        pytest.raises(NmapProcessError, match="UDP profiles require raw-socket privileges"),
+    ):
+        run_scan("example.com", ScanProfile.UDP_TOP_100, timeout_seconds=30)
+
+
+@pytest.mark.parametrize("profile", [ScanProfile.UDP_TOP_100, ScanProfile.TCP_UDP_COMMON])
+def test_hosted_environment_rejects_udp_profiles_before_starting_nmap(monkeypatch, profile):
+    monkeypatch.setenv("APP_ENV", "production")
+    with (
+        patch("backend.app.scanner.engine.shutil.which", return_value="nmap"),
+        patch("backend.app.scanner.engine.subprocess.Popen") as run,
+        pytest.raises(NmapProcessError, match="UDP scanning is unavailable in hosted deployments"),
+    ):
+        run_scan("example.com", profile, timeout_seconds=30)
+    run.assert_not_called()
 
 
 def test_normal_output_publishes_stats_stages_and_errors() -> None:
