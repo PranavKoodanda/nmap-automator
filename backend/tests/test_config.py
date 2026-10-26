@@ -19,7 +19,6 @@ def configure(monkeypatch, **overrides):
     values.update(overrides)
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.delenv("APP_ACCESS_PASSWORD", raising=False)
     return values
 
 

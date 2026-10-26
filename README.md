@@ -3,14 +3,14 @@ A Python-based network security assessment tool that automates Nmap scanning, id
 
 ## Local development
 
-The backend validates targets, uses only fixed scan profiles, and executes Nmap
-without a shell. Public visitors do not use a shared application password.
-Before scanning, a visitor must publish a short-lived DNS TXT challenge for a
-fully qualified hostname they control. The resulting capability is limited to
-that hostname. At scan time, the backend resolves it, rejects non-public or
-special-purpose addresses, and passes one validated IP address to Nmap. Only
-scan systems you own or are explicitly authorized to assess. Keep the API
-bound to loopback during development.
+The backend accepts an IP address or hostname without a login or DNS ownership
+step. It creates an anonymous browser session automatically and uses its
+short-lived signed capability to isolate that session's scans. The backend
+resolves hostnames immediately before a scan, rejects non-public or
+special-purpose addresses, and passes one validated IP address to Nmap. Public
+IP validation does not prove authorization: scan only systems you own or are
+explicitly authorized to assess. Keep the API bound to loopback during
+development.
 
 ```powershell
 $env:PYTHONPATH = "E:\Projects\nmap"
@@ -51,16 +51,16 @@ backend environment settings (do not commit the generated value):
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-`SCAN_TARGET_ALLOWLIST` may be set as an additional restriction on verified
-hostnames. If set, only listed hosts can be verified and scanned. DNS ownership
-proof and public-IP validation still apply when it is unset; there is no
-unverified or arbitrary-target mode.
+`SCAN_TARGET_ALLOWLIST` may be set as an additional restriction on submitted
+targets or their resolved addresses. It is optional; public-address checks,
+fixed scan profiles, request limits, queue limits, and session ownership always
+apply.
 
-Challenge and rate-limit stores are bounded in process memory; capabilities
-are kept in browser session storage and expire. Challenges, rate limits, and
-scan history are lost when the backend restarts. Rate limits, ownership, and
-scan records are not shared across multiple Render instances. Use one backend
-instance with this implementation's current in-memory lifetime model.
+Anonymous capabilities are kept in browser session storage and expire. Bounded
+rate limits and scan history are held in process memory and are not shared
+across multiple Render instances; rate limits are not distributed. History is
+lost on backend restart. Use one backend instance with this implementation's
+current in-memory lifetime model.
 
 Completed scans support HTML, JSON, and PDF downloads through
 `GET /api/scans/{scan_id}/report?format=html|json|pdf`. PDF generation uses

@@ -8,7 +8,6 @@ import ScanActivityView from './pages/ScanActivityView'
 import { SCAN_PROFILES } from './services/mockData'
 import {
   getModeLabel,
-  getActiveVerifiedHost,
   getScanActivity,
   isDemoMode,
   listScans,
@@ -18,7 +17,6 @@ import {
 import './AppLayout.css'
 
 function App() {
-  const [verifiedHost, setVerifiedHost] = useState(() => getActiveVerifiedHost())
   const [page, setPage] = useState('dashboard')
   const [scans, setScans] = useState([])
   const [selectedScanId, setSelectedScanId] = useState(null)
@@ -32,12 +30,6 @@ function App() {
   const scansRef = useRef(scans)
   const eventCursorsRef = useRef(new Map())
   const monitorInFlightRef = useRef(false)
-
-  useEffect(() => {
-    const expire = () => setVerifiedHost('')
-    window.addEventListener('nmap-capability-expired', expire)
-    return () => window.removeEventListener('nmap-capability-expired', expire)
-  }, [])
 
   useEffect(() => {
     scansRef.current = scans
@@ -183,8 +175,6 @@ function App() {
           activeScan={activeScan}
           error={scanError}
           onStartScan={handleStartScan}
-          verifiedHost={verifiedHost}
-          onVerified={setVerifiedHost}
           demoMode={demoMode}
         />
       ) : page === 'history' ? (
