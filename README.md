@@ -67,7 +67,7 @@ Completed scans support HTML, JSON, and PDF downloads through
 the declared ReportLab dependency. Scan records are in memory and disappear
 when the backend restarts.
 
-The backend provides seven fixed profiles: `quick_tcp`, `basic_tcp`, `full_tcp`,
+The backend defines seven fixed profiles: `quick_tcp`, `basic_tcp`, `full_tcp`,
 `service_detection`, `comprehensive_tcp`, `udp_top_100`, and
 `tcp_udp_common`. Their scopes range from 100 common TCP ports to all TCP
 
@@ -77,7 +77,12 @@ performance/accuracy trade-off: less reliable networks may miss ports that
 would have been detected with more retransmissions. The configured profile
 timeouts remain hard limits; a timeout is reported as a failed scan. Their scopes range from 100 common TCP ports to all TCP
 ports, light service detection, 100 common UDP ports, or combined common TCP
-and UDP ports. UDP scans may require elevated privileges.
+and UDP ports. Every command skips host discovery with `-Pn`; the five TCP
+profiles use TCP connect scans (`-sT`) and do not need raw-socket privileges.
+Hosted production mode disables the two UDP profiles because UDP scanning
+requires raw sockets. Local development keeps them available when the local
+Nmap environment supports raw sockets; otherwise the API reports a clear
+unsupported-permission error.
 
 Profile-specific timeouts default to 60, 120, 900, 300, 1200, 600, and 600
 seconds respectively. The environment variable

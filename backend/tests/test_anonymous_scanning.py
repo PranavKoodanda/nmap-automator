@@ -172,6 +172,25 @@ def test_unsupported_profile_is_rejected():
         manager.shutdown()
 
 
+@pytest.mark.parametrize("profile", ["udp_top_100", "tcp_udp_common"])
+def test_hosted_api_returns_clear_error_for_udp_profiles(monkeypatch, profile):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("FRONTEND_CORS_ORIGINS", "https://scanner.example.test")
+    client, manager = _client_with_manager()
+    try:
+        token = _session_token(client)
+        response = client.post(
+            "/api/scans",
+            json={"target": "example.com", "profile": profile},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 422
+        assert "UDP scanning is unavailable" in response.json()["detail"]
+        assert "TCP-only profile" in response.json()["detail"]
+    finally:
+        manager.shutdown()
+
+
 def test_sessions_isolate_scan_history_and_session_creation_is_rate_limited(monkeypatch):
     _reset_limiter(monkeypatch)
     monkeypatch.setenv("ANONYMOUS_SESSION_LIMIT", "2")

@@ -39,7 +39,9 @@ The default maximum number of simultaneously executing scans is 2. Set
 4 (maximum 64). Jobs beyond that capacity receive `429`; jobs within capacity
 remain `queued` until a worker is available.
 
-Nmap execution has bounded, profile-specific timeouts. The seven profiles are:
+Nmap execution has bounded, profile-specific timeouts. All commands use `-Pn`
+to skip host discovery, and the five TCP profiles use `-sT` connect scans.
+The seven registered profiles are:
 
 | ID | Scope | Default timeout |
 | --- | --- | --- |
@@ -53,9 +55,13 @@ Nmap execution has bounded, profile-specific timeouts. The seven profiles are:
 
 Timeouts can be overridden with `NMAP_TIMEOUT_<PROFILE_ID_IN uppercase>`.
 Values must be positive integers and may not exceed the hard maximum of 1800
-seconds. UDP scans may require elevated privileges and can be slower or less
-deterministic than TCP scans. A timeout fails the scan and does not produce
-successful or partial results.
+seconds. In `APP_ENV=production`, UDP profiles are unavailable because the
+hosted service does not have raw-socket privileges; the UI hides those profiles
+and the API returns `422` if they are requested directly. In local development,
+UDP profiles remain enabled. If the local Nmap process reports that raw sockets
+are unavailable, the scan fails with a clear TCP-only recommendation. UDP
+scans can be slower or less deterministic than TCP scans. A timeout fails the
+scan and does not produce successful or partial results.
 
 ## `POST /api/scans`
 

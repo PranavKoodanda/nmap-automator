@@ -22,6 +22,7 @@ from backend.app.scanner.profiles import (
     ScanProfile,
     get_profile,
     get_profile_timeout,
+    requires_raw_sockets,
 )
 from backend.app.scanner.validation import validate_target
 
@@ -116,6 +117,14 @@ def run_scan(
 
     normalized_target = validate_target(target)
     profile_definition = get_profile(profile)
+    if (
+        os.getenv("APP_ENV", "development").strip().lower() == "production"
+        and requires_raw_sockets(profile)
+    ):
+        raise NmapProcessError(
+            "UDP scanning is unavailable in hosted deployments because it requires raw-socket privileges. "
+            "Select a TCP-only profile."
+        )
     if timeout_seconds is None:
         timeout_seconds = get_profile_timeout(profile)
     if timeout_seconds <= 0 or timeout_seconds > MAX_TIMEOUT_SECONDS:
@@ -139,6 +148,9 @@ def run_scan(
     arguments = [
         executable_path,
         *profile_definition.arguments,
+        # Host discovery may try raw ICMP sockets even for TCP connect scans.
+        # Keep -Pn common to every fixed profile, adding it only once.
+        *(flag for flag in ("-Pn",) if flag not in profile_definition.arguments),
         "-v",
         "--stats-every",
         "5s",
@@ -380,6 +392,15 @@ def run_scan(
         stderr = "".join(stderr_chunks)
         if process.returncode != 0:
             details = stderr.strip()
+            lowered_details = details.lower()
+            if "raw socket" in lowered_details and any(
+                phrase in lowered_details
+                for phrase in ("operation not permitted", "permission denied", "not permitted")
+            ):
+                raise NmapProcessError(
+                    "Nmap could not open a raw socket. UDP profiles require raw-socket privileges; "
+                    "select a TCP-only profile in this environment."
+                )
             message = f"Nmap exited with status {process.returncode}."
             if details:
                 message = f"{message} {details}"

@@ -109,6 +109,9 @@ function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
           <p className="field-help profile-help">
             {profiles.find((item) => item.id === profile)?.description}
           </p>
+          {import.meta.env.PROD && !demoMode && (
+            <p className="field-help">This hosted service supports TCP profiles. UDP scanning requires raw-socket privileges that are unavailable here.</p>
+          )}
           {['full_tcp', 'comprehensive_tcp', 'udp_top_100', 'tcp_udp_common'].includes(profile) && (
             <p className="field-help">This profile can take considerably longer than a basic scan.</p>
           )}

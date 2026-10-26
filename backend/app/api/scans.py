@@ -27,6 +27,7 @@ from backend.app.services.scan_manager import (
     ScanNotFoundError,
     ScanNotReadyError,
 )
+from backend.app.scanner.profiles import requires_raw_sockets
 
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
@@ -118,6 +119,14 @@ def create_scan(
     client = request.client.host if request.client else "unknown"
     if not allow_rate_attempt("scan", client, settings.scan_rate_limit, settings.rate_limit_window_seconds):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many scan submissions. Try again later.")
+    if settings.app_env == "production" and requires_raw_sockets(payload.profile):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "UDP scanning is unavailable in hosted deployments because it requires raw-socket privileges. "
+                "Select a TCP-only profile."
+            ),
+        )
     try:
         target = validate_target(payload.target)
     except TargetValidationError as exc:
