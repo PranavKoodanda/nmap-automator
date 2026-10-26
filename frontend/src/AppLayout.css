@@ -266,9 +266,9 @@
   .report-controls .download-link { width: 100%; }
   .report-metadata { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.auth-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-.auth-card { width: min(100%, 420px); display: grid; gap: 14px; padding: 32px; background: #fff; border: 1px solid #dce7e5; border-radius: 16px; box-shadow: 0 18px 50px #24434d18; }
-.auth-card h1, .auth-card p { margin: 0; }
-.auth-card input { width: 100%; padding: 12px; border: 1px solid #aebfbc; border-radius: 8px; font: inherit; }
-.auth-card button { padding: 12px; border: 0; border-radius: 8px; background: #176b68; color: #fff; font: inherit; cursor: pointer; }
-.auth-card button:disabled { opacity: .65; cursor: wait; }
+.verification-record { display: grid; gap: 12px; padding: 16px; border: 1px solid #c8d9d6; border-radius: 10px; background: #f6faf9; }
+.verification-record p, .verification-record dl { margin: 0; }
+.verification-record dl { display: grid; gap: 6px; }
+.verification-record dt { font-weight: 700; }
+.verification-record dd { margin: 0 0 8px; overflow-wrap: anywhere; }
+.verification-record code { user-select: all; }

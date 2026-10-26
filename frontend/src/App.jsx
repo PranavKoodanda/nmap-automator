@@ -8,8 +8,7 @@ import ScanActivityView from './pages/ScanActivityView'
 import { SCAN_PROFILES } from './services/mockData'
 import {
   getModeLabel,
-  hasSessionToken,
-  login as loginRequest,
+  getActiveVerifiedHost,
   getScanActivity,
   isDemoMode,
   listScans,
@@ -19,10 +18,7 @@ import {
 import './AppLayout.css'
 
 function App() {
-  const [authenticated, setAuthenticated] = useState(() => isDemoMode() || hasSessionToken())
-  const [password, setPassword] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [loginBusy, setLoginBusy] = useState(false)
+  const [verifiedHost, setVerifiedHost] = useState(() => getActiveVerifiedHost())
   const [page, setPage] = useState('dashboard')
   const [scans, setScans] = useState([])
   const [selectedScanId, setSelectedScanId] = useState(null)
@@ -38,25 +34,10 @@ function App() {
   const monitorInFlightRef = useRef(false)
 
   useEffect(() => {
-    const expire = () => setAuthenticated(false)
-    window.addEventListener('nmap-auth-expired', expire)
-    return () => window.removeEventListener('nmap-auth-expired', expire)
+    const expire = () => setVerifiedHost('')
+    window.addEventListener('nmap-capability-expired', expire)
+    return () => window.removeEventListener('nmap-capability-expired', expire)
   }, [])
-
-  async function handleLogin(event) {
-    event.preventDefault()
-    setLoginBusy(true)
-    setLoginError('')
-    try {
-      await loginRequest(password)
-      setPassword('')
-      setAuthenticated(true)
-    } catch (error) {
-      setLoginError(error.message)
-    } finally {
-      setLoginBusy(false)
-    }
-  }
 
   useEffect(() => {
     scansRef.current = scans
@@ -77,7 +58,6 @@ function App() {
   }
 
   useEffect(() => {
-    if (!authenticated) return undefined
     let mounted = true
     listScans()
       .then((items) => {
@@ -99,10 +79,10 @@ function App() {
     return () => {
       mounted = false
     }
-  }, [demoMode, authenticated])
+  }, [demoMode])
 
   useEffect(() => {
-    if (demoMode || !authenticated) return undefined
+    if (demoMode) return undefined
     let cancelled = false
     const pollActiveScans = async () => {
       if (cancelled || monitorInFlightRef.current) return
@@ -139,7 +119,7 @@ function App() {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [demoMode, authenticated])
+  }, [demoMode])
 
   async function handleStartScan(target, profile, onAccepted) {
     setScanError('')
@@ -183,21 +163,6 @@ function App() {
 
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) ?? null
 
-  if (!authenticated) {
-    return (
-      <main className="auth-screen">
-        <form className="auth-card" onSubmit={handleLogin}>
-          <h1>Nmap Automator</h1>
-          <p>Enter the access password to continue.</p>
-          <label htmlFor="access-password">Access password</label>
-          <input id="access-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-          {loginError && <div className="alert alert-error" role="alert">{loginError}</div>}
-          <button type="submit" disabled={loginBusy}>{loginBusy ? 'Signing in…' : 'Sign in'}</button>
-        </form>
-      </main>
-    )
-  }
-
   return (
     <AppLayout page={page} onNavigate={setPage} demoMode={demoMode} modeLabel={getModeLabel()} connectionState={connectionState}>
       {loadError && (
@@ -218,6 +183,8 @@ function App() {
           activeScan={activeScan}
           error={scanError}
           onStartScan={handleStartScan}
+          verifiedHost={verifiedHost}
+          onVerified={setVerifiedHost}
           demoMode={demoMode}
         />
       ) : page === 'history' ? (

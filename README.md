@@ -3,18 +3,19 @@ A Python-based network security assessment tool that automates Nmap scanning, id
 
 ## Local development
 
-The backend validates target syntax, uses only fixed scan profiles, and executes
-Nmap without a shell. All scan endpoints require a password-issued bearer token.
-Configure `APP_ACCESS_PASSWORD` and `APP_AUTH_SECRET` on the backend; the frontend
-stores its short-lived token in session storage. `SCAN_TARGET_ALLOWLIST` can
-restrict targets locally and is required in production. Only scan systems you
-own or are explicitly authorized to assess. Keep the API bound to loopback
-during development.
+The backend validates targets, uses only fixed scan profiles, and executes Nmap
+without a shell. Public visitors do not use a shared application password.
+Before scanning, a visitor must publish a short-lived DNS TXT challenge for a
+fully qualified hostname they control. The resulting capability is limited to
+that hostname. At scan time, the backend resolves it, rejects non-public or
+special-purpose addresses, and passes one validated IP address to Nmap. Only
+scan systems you own or are explicitly authorized to assess. Keep the API
+bound to loopback during development.
 
 ```powershell
 $env:PYTHONPATH = "E:\Projects\nmap"
-$env:APP_ACCESS_PASSWORD = "your-private-local-password"
-$env:APP_AUTH_SECRET = "your-private-local-random-secret-at-least-32-bytes"
+$env:APP_AUTH_SECRET = (python -c "import secrets; print(secrets.token_urlsafe(48))")
+$env:FRONTEND_CORS_ORIGINS = "http://localhost:5173"
 python -m pip install -r backend\requirements.txt
 uvicorn backend.app.main:app --host 127.0.0.1 --port 8001
 ```
@@ -33,28 +34,33 @@ when explicitly previewing demonstration data.
 
 ## Render deployment
 
-Deploy the repository's `Dockerfile` as a Render web service. Set backend
-environment variables in the Render dashboard: `APP_ENV=production`,
-`APP_ACCESS_PASSWORD` (a unique password of at least 12 characters),
-`APP_AUTH_SECRET` (at least 32 random bytes), `FRONTEND_CORS_ORIGINS` (one or
-more explicit HTTPS frontend origins; wildcards are rejected), and
-`SCAN_TARGET_ALLOWLIST` (comma-separated IP addresses or hostnames you are
-explicitly authorized to assess). Production startup fails closed if any
-required setting is missing. Keep secrets out of the repository and all
-`VITE_` variables. Configure the frontend's
-`VITE_API_BASE_URL` to the backend URL at build time; it contains no secret.
-`/health` remains available without a token for platform health checks.
+Deploy the repository's `Dockerfile` as a Render web service and deploy the
+frontend as a static site. Set `APP_ENV=production`, `APP_AUTH_SECRET` (at
+least 32 high-entropy characters), and `FRONTEND_CORS_ORIGINS` (the exact
+HTTPS frontend origin) in the backend environment. Production rejects missing
+or weak signing keys, wildcard origins, malformed origins, and non-HTTPS
+origins. Keep the secret out of the repository and every `VITE_` variable.
+Set `VITE_API_BASE_URL` to the backend HTTPS origin in the static site's build
+environment; production builds do not fall back to localhost. `/health` is
+public for platform checks.
 
-Generate private production values locally with Python, then enter the output
-directly in Render's backend environment settings (do not commit it):
+Generate a private signing key locally and enter it directly in Render's
+backend environment settings (do not commit the generated value):
 
 ```powershell
-python -c "import secrets; print('APP_ACCESS_PASSWORD=' + secrets.token_urlsafe(24)); print('APP_AUTH_SECRET=' + secrets.token_urlsafe(48))"
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-The login-attempt limiter is process-local and its memory is bounded. Each
-backend instance enforces its own limit; attempts are not shared across
-instances, so this is not distributed rate limiting.
+`SCAN_TARGET_ALLOWLIST` may be set as an additional restriction on verified
+hostnames. If set, only listed hosts can be verified and scanned. DNS ownership
+proof and public-IP validation still apply when it is unset; there is no
+unverified or arbitrary-target mode.
+
+Challenge and rate-limit stores are bounded in process memory; capabilities
+are kept in browser session storage and expire. Challenges, rate limits, and
+scan history are lost when the backend restarts. Rate limits, ownership, and
+scan records are not shared across multiple Render instances. Use one backend
+instance with this implementation's current in-memory lifetime model.
 
 Completed scans support HTML, JSON, and PDF downloads through
 `GET /api/scans/{scan_id}/report?format=html|json|pdf`. PDF generation uses

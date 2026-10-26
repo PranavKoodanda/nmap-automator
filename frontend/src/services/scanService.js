@@ -5,12 +5,27 @@ import {
   INITIAL_DEMO_SCANS,
 } from './mockData.js'
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001').replace(/\/$/, '')
+const configuredApiUrl = (import.meta.env.VITE_API_BASE_URL || '').trim()
+let API_CONFIGURATION_ERROR = ''
+if (import.meta.env.PROD) {
+  try {
+    const apiUrl = new URL(configuredApiUrl)
+    if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password ||
+      ['localhost', '127.0.0.1', '::1'].includes(apiUrl.hostname)) {
+      API_CONFIGURATION_ERROR = 'Production VITE_API_BASE_URL must be a public HTTPS backend URL.'
+    }
+  } catch {
+    API_CONFIGURATION_ERROR = 'Set VITE_API_BASE_URL to the public HTTPS backend URL before building for production.'
+  }
+}
+const API_BASE_URL = (configuredApiUrl || (import.meta.env.DEV ? 'http://127.0.0.1:8001' : '')).replace(/\/$/, '')
 const REAL_STORAGE_KEY = 'nmap-automator.real-scan-ids.v1'
 const DEMO_STORAGE_KEY = 'nmap-automator.demo-scans.v1'
 const POLL_INTERVAL_MS = 1000
 const POLL_TIMEOUT_MS = 35 * 60 * 1000
-const TOKEN_KEY = 'nmap-automator.access-token.v1'
+const CAPABILITIES_KEY = 'nmap-automator.domain-capabilities.v1'
+const SCAN_CAPABILITIES_KEY = 'nmap-automator.scan-capabilities.v1'
+const ACTIVE_HOST_KEY = 'nmap-automator.active-verified-host.v1'
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -51,21 +66,27 @@ function writeRealScanIds(ids) {
 }
 
 async function request(path, options = {}) {
+  if (API_CONFIGURATION_ERROR) throw new ApiError(API_CONFIGURATION_ERROR)
+  const { capabilityToken, scanId, ...fetchOptions } = options
   let response
+  let token
   try {
-    const token = window.sessionStorage.getItem(TOKEN_KEY)
+    token = capabilityToken || (scanId ? readScanCapabilities()[scanId] : null)
     response = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
+      ...fetchOptions,
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
     })
   } catch {
-    throw new ApiError('The backend could not be reached. Start the API server and try again.')
+    throw new ApiError(API_BASE_URL
+      ? 'The backend could not be reached. Check the API URL and try again.'
+      : 'VITE_API_BASE_URL is required for a production build.')
   }
 
   if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login') {
-      window.sessionStorage.removeItem(TOKEN_KEY)
-      window.dispatchEvent(new Event('nmap-auth-expired'))
+    if (response.status === 401 && token) {
+      if (scanId) removeScanCapability(scanId)
+      removeCapabilityToken(token)
+      window.dispatchEvent(new Event('nmap-capability-expired'))
     }
     let detail = `Backend request failed (${response.status}).`
     try {
@@ -79,18 +100,68 @@ async function request(path, options = {}) {
   return response
 }
 
-export function hasSessionToken() {
-  return Boolean(window.sessionStorage.getItem(TOKEN_KEY))
+function readSessionObject(key) {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(key) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
 }
 
-export async function login(password) {
-  const response = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) })
+function readScanCapabilities() {
+  return readSessionObject(SCAN_CAPABILITIES_KEY)
+}
+
+function writeScanCapabilities(value) {
+  window.sessionStorage.setItem(SCAN_CAPABILITIES_KEY, JSON.stringify(value))
+}
+
+function removeScanCapability(scanId) {
+  const capabilities = readScanCapabilities()
+  delete capabilities[scanId]
+  writeScanCapabilities(capabilities)
+}
+
+function removeCapabilityToken(token) {
+  const capabilities = readSessionObject(CAPABILITIES_KEY)
+  for (const [hostname, savedToken] of Object.entries(capabilities)) {
+    if (savedToken === token) delete capabilities[hostname]
+  }
+  window.sessionStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities))
+  if (!Object.keys(capabilities).length) window.sessionStorage.removeItem(ACTIVE_HOST_KEY)
+}
+
+function capabilityForHost(hostname) {
+  return readSessionObject(CAPABILITIES_KEY)[hostname] || null
+}
+
+export function getActiveVerifiedHost() {
+  const hostname = window.sessionStorage.getItem(ACTIVE_HOST_KEY)
+  return hostname && capabilityForHost(hostname) ? hostname : ''
+}
+
+export async function createDomainChallenge(hostname) {
+  const response = await request('/api/verification/challenges', {
+    method: 'POST',
+    body: JSON.stringify({ hostname }),
+  })
+  return response.json()
+}
+
+export async function verifyDomainChallenge(challengeId) {
+  const response = await request('/api/verification/verify', {
+    method: 'POST',
+    body: JSON.stringify({ challenge_id: challengeId }),
+  })
   const payload = await response.json()
-  window.sessionStorage.setItem(TOKEN_KEY, payload.access_token)
-}
-
-export function logout() {
-  window.sessionStorage.removeItem(TOKEN_KEY)
+  const capabilities = readSessionObject(CAPABILITIES_KEY)
+  capabilities[payload.hostname] = payload.access_token
+  const hosts = Object.keys(capabilities)
+  while (hosts.length > 20) delete capabilities[hosts.shift()]
+  window.sessionStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities))
+  window.sessionStorage.setItem(ACTIVE_HOST_KEY, payload.hostname)
+  return payload.hostname
 }
 
 function adaptPort(port) {
@@ -186,6 +257,7 @@ function adaptEvents(payload) {
 async function getApiEvents(scanId, after = 0) {
   const response = await request(
     `/api/scans/${encodeURIComponent(scanId)}/events?after=${after}`,
+    { scanId },
   )
   const payload = await response.json()
   const events = adaptEvents(payload)
@@ -197,7 +269,7 @@ async function getApiEvents(scanId, after = 0) {
 }
 
 async function getApiScan(scanId) {
-  const scanResponse = await request(`/api/scans/${encodeURIComponent(scanId)}`)
+  const scanResponse = await request(`/api/scans/${encodeURIComponent(scanId)}`, { scanId })
   const scan = await scanResponse.json()
   const eventBatch = await getApiEvents(scanId, 0)
   if (!['completed', 'cancelled'].includes(scan.status)) {
@@ -205,8 +277,8 @@ async function getApiScan(scanId) {
   }
 
   const [portsResponse, findingsResponse] = await Promise.all([
-    request(`/api/scans/${encodeURIComponent(scanId)}/ports`),
-    request(`/api/scans/${encodeURIComponent(scanId)}/findings`),
+    request(`/api/scans/${encodeURIComponent(scanId)}/ports`, { scanId }),
+    request(`/api/scans/${encodeURIComponent(scanId)}/findings`, { scanId }),
   ])
   const ports = (await portsResponse.json()).ports.map(adaptPort)
   const findings = (await findingsResponse.json()).findings.map(adaptFinding)
@@ -215,7 +287,7 @@ async function getApiScan(scanId) {
 
 export async function getScanActivity(scanId, after = 0) {
   const [scanResponse, eventBatch] = await Promise.all([
-    request(`/api/scans/${encodeURIComponent(scanId)}`),
+    request(`/api/scans/${encodeURIComponent(scanId)}`, { scanId }),
     getApiEvents(scanId, after),
   ])
   const scan = adaptScan(await scanResponse.json())
@@ -235,7 +307,7 @@ export async function getScanActivity(scanId, after = 0) {
 
 export async function stopScan(scanId) {
   if (DEMO_MODE) throw new Error('Stopping scans is available in live API mode.')
-  const response = await request(`/api/scans/${encodeURIComponent(scanId)}/stop`, { method: 'POST' })
+  const response = await request(`/api/scans/${encodeURIComponent(scanId)}/stop`, { method: 'POST', scanId })
   const scan = adaptScan(await response.json())
   const eventBatch = await getApiEvents(scanId, 0)
   scan.events = eventBatch.events
@@ -259,11 +331,17 @@ async function listApiScans() {
 }
 
 async function startApiScan(target, profile, onUpdate, onAccepted) {
+  const capabilityToken = capabilityForHost(target)
+  if (!capabilityToken) throw new ApiError('Verify ownership of this hostname before scanning.')
   const response = await request('/api/scans', {
     method: 'POST',
     body: JSON.stringify({ target, profile }),
+    capabilityToken,
   })
   const created = await response.json()
+  const scanCapabilities = readScanCapabilities()
+  scanCapabilities[created.scan_id] = capabilityToken
+  writeScanCapabilities(scanCapabilities)
   const ids = readRealScanIds()
   writeRealScanIds([created.scan_id, ...ids])
   let adapted = adaptScan(created)
@@ -277,7 +355,7 @@ async function startApiScan(target, profile, onUpdate, onAccepted) {
   while (!['completed', 'failed', 'cancelled'].includes(current.status)) {
     if (Date.now() >= deadline) throw new ApiError('The scan polling timeout was reached.')
     await wait(POLL_INTERVAL_MS)
-    const statusResponse = await request(`/api/scans/${encodeURIComponent(created.scan_id)}`)
+    const statusResponse = await request(`/api/scans/${encodeURIComponent(created.scan_id)}`, { scanId: created.scan_id })
     current = await statusResponse.json()
     const eventBatch = await getApiEvents(created.scan_id, cursor)
     cursor = eventBatch.cursor
@@ -365,7 +443,7 @@ export function startScan(target, profile, onUpdate, onAccepted) {
 
 export async function downloadReport(scan, format = 'html') {
   if (DEMO_MODE) return downloadDemoReport(scan, format)
-  const response = await request(`/api/scans/${encodeURIComponent(scan.id)}/report?format=${encodeURIComponent(format)}`)
+  const response = await request(`/api/scans/${encodeURIComponent(scan.id)}/report?format=${encodeURIComponent(format)}`, { scanId: scan.id })
   const blob = await response.blob()
   const disposition = response.headers.get('Content-Disposition') || ''
   const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] || `security-assessment-${scan.id}.${format}`

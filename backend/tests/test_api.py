@@ -8,14 +8,17 @@ import sys
 import threading
 import time
 from unittest.mock import Mock
+import pytest
 
-os.environ.setdefault("APP_ACCESS_PASSWORD", "test-access-password")
 os.environ["APP_AUTH_SECRET"] = secrets.token_urlsafe(32)
+os.environ["DOMAIN_CHALLENGE_LIMIT"] = "100"
+os.environ["DOMAIN_VERIFICATION_LIMIT"] = "100"
+os.environ["SCAN_SUBMISSION_LIMIT"] = "100"
 
 from fastapi.testclient import TestClient
 
 from backend.app import auth as auth_module
-from backend.app.auth import issue_token, validate_token
+from backend.app.auth import decode_capability, issue_capability
 from backend.app.api.scans import get_scan_manager
 from backend.app.config import Settings
 from backend.app.main import create_app
@@ -30,6 +33,9 @@ from backend.app.scanner.engine import (
 from backend.app.scanner.parser import PortResult, ScanResult, ServiceMetadata
 from backend.app.scanner.profiles import ScanProfile
 from backend.app.services.scan_manager import ScanManager
+from backend.app.api import scans as scans_api
+from backend.app.auth import issue_capability
+from backend.app.scanner.validation import validate_fqdn
 
 
 def execution_result(target: str = "127.0.0.1") -> ScanExecutionResult:
@@ -53,10 +59,64 @@ def execution_result(target: str = "127.0.0.1") -> ScanExecutionResult:
 
 
 class AuthenticatedTestClient(TestClient):
+    def __init__(self, app):
+        super().__init__(app)
+        self.host_tokens = {}
+        self.scan_tokens = {}
+
     def request(self, method, url, **kwargs):
         headers = dict(kwargs.pop("headers", {}) or {})
-        headers.setdefault("Authorization", f"Bearer {issue_token(Settings.from_environment())}")
-        return super().request(method, url, headers=headers, **kwargs)
+        path = url.split("?", 1)[0]
+        token = headers.get("Authorization", "").removeprefix("Bearer ") or None
+        payload = kwargs.get("json")
+        if method.upper() == "POST" and path == "/api/scans" and isinstance(payload, dict):
+            payload = dict(payload)
+            original = payload.get("target")
+            test_hosts = {
+                "127.0.0.1": "scan.example.test",
+                "192.0.2.10": "scan-a.example.test",
+                "192.0.2.11": "scan-b.example.test",
+            }
+            if original in test_hosts:
+                payload["target"] = test_hosts[original]
+                kwargs["json"] = payload
+            hostname = payload.get("target")
+            try:
+                if isinstance(hostname, str):
+                    hostname = validate_fqdn(hostname)
+            except ValueError:
+                hostname = None
+            if isinstance(hostname, str) and "://" not in hostname:
+                token = token or self.host_tokens.get(hostname)
+                if token is None:
+                    owner = secrets.token_urlsafe(24)
+                    token = issue_capability(hostname, owner, Settings.from_environment())
+                    self.host_tokens[hostname] = token
+        elif path.startswith("/api/scans/"):
+            scan_id = path.split("/", 3)[3].split("/", 1)[0]
+            token = token or self.scan_tokens.get(scan_id)
+            if token is None:
+                token = self.host_tokens.get("scan.example.test")
+                if token is None:
+                    token = issue_capability("scan.example.test", secrets.token_urlsafe(24), Settings.from_environment())
+                    self.host_tokens["scan.example.test"] = token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        response = super().request(method, url, headers=headers, **kwargs)
+        if method.upper() == "POST" and path == "/api/scans" and response.status_code == 202 and token:
+            self.scan_tokens[response.json()["scan_id"]] = token
+        return response
+
+
+@pytest.fixture(autouse=True)
+def mock_public_dns(monkeypatch):
+    def resolve(hostname):
+        return {
+            "scan-a.example.test": "8.8.8.10",
+            "scan-b.example.test": "8.8.8.11",
+        }.get(hostname, "8.8.8.8")
+
+    monkeypatch.setattr(scans_api, "resolve_public_scan_address", resolve)
 
 
 def client_for(scanner=None, *, max_pending: int = 4) -> tuple[TestClient, ScanManager]:
@@ -70,7 +130,7 @@ def client_for(scanner=None, *, max_pending: int = 4) -> tuple[TestClient, ScanM
     return AuthenticatedTestClient(app), manager
 
 
-def test_auth_login_expiry_rate_limit_and_unauthorized_scan_routes() -> None:
+def test_capability_auth_expiry_rate_limit_and_unauthorized_scan_routes() -> None:
     app = create_app()
     client = TestClient(app)
     assert client.get("/health").status_code == 200
@@ -85,22 +145,15 @@ def test_auth_login_expiry_rate_limit_and_unauthorized_scan_routes() -> None:
         client.post("/api/scans/missing/stop"),
     ]
     assert all(response.status_code == 401 for response in protected_requests)
-    login = client.post("/api/auth/login", json={"password": "test-access-password"})
-    assert login.status_code == 200
-    token = login.json()["access_token"]
     settings = Settings.from_environment()
-    assert validate_token(token, settings)
-    assert not validate_token(issue_token(settings, now=100), settings, now=100 + settings.auth_token_ttl_seconds)
-    assert not validate_token(token + "x", settings)
-    assert client.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
-    for _ in range(settings.login_attempt_limit - 2):
-        client.post("/api/auth/login", json={"password": "wrong"})
-    assert client.post("/api/auth/login", json={"password": "test-access-password"}).status_code == 429
+    token = issue_capability("owned.example.test", secrets.token_urlsafe(24), settings, now=100)
+    assert decode_capability(token, settings, now=101) is not None
+    assert decode_capability(token, settings, now=100 + settings.capability_ttl_seconds) is None
+    assert decode_capability(token + "x", settings) is None
 
 
 def test_production_requires_allowlisted_targets(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("APP_ACCESS_PASSWORD", "a-valid-test-password-for-production")
     monkeypatch.setenv("APP_AUTH_SECRET", secrets.token_urlsafe(48))
     monkeypatch.setenv("FRONTEND_CORS_ORIGINS", "https://example.test")
     monkeypatch.setenv("SCAN_TARGET_ALLOWLIST", "authorized.example")
@@ -115,43 +168,46 @@ def test_production_requires_allowlisted_targets(monkeypatch) -> None:
 
 
 def test_login_rate_limit_expires_and_cleans_old_client_entries(monkeypatch) -> None:
-    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_rate_attempts", {})
+    monkeypatch.setattr(auth_module, "_challenges", {})
     monkeypatch.setattr(auth_module, "_next_cleanup_at", 0.0)
-    assert auth_module._record_login_attempt("192.0.2.1", 10, 2, 300)
-    assert auth_module._record_login_attempt("192.0.2.1", 11, 2, 300)
-    assert not auth_module._record_login_attempt("192.0.2.1", 12, 2, 300)
-    assert auth_module._record_login_attempt("192.0.2.2", 400, 2, 300)
-    assert "192.0.2.1" not in auth_module._attempts
+    assert auth_module.allow_rate_attempt("challenge", "192.0.2.1", 2, 300, now=10)
+    assert auth_module.allow_rate_attempt("challenge", "192.0.2.1", 2, 300, now=11)
+    assert not auth_module.allow_rate_attempt("challenge", "192.0.2.1", 2, 300, now=12)
+    assert auth_module.allow_rate_attempt("challenge", "192.0.2.2", 2, 300, now=400)
+    assert ("challenge", "192.0.2.1") not in auth_module._rate_attempts
 
 
 def test_login_rate_limiter_evicts_safely_at_hard_client_limit(monkeypatch) -> None:
-    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_rate_attempts", {})
+    monkeypatch.setattr(auth_module, "_challenges", {})
     monkeypatch.setattr(auth_module, "_next_cleanup_at", float("inf"))
-    monkeypatch.setattr(auth_module, "MAX_TRACKED_LOGIN_CLIENTS", 32)
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_RATE_BUCKETS", 32)
     for index in range(32):
-        assert auth_module._record_login_attempt(f"198.51.100.{index}", index + 1, 5, 300)
-    assert not auth_module._record_login_attempt("198.51.100.32", 40, 5, 300)
-    assert len(auth_module._attempts) == 32
-    assert "198.51.100.0" in auth_module._attempts
-    assert "198.51.100.32" not in auth_module._attempts
-    assert auth_module._record_login_attempt("198.51.100.32", 400, 5, 300)
-    assert len(auth_module._attempts) == 1
+        assert auth_module.allow_rate_attempt("challenge", f"198.51.100.{index}", 5, 300, now=index + 1)
+    assert not auth_module.allow_rate_attempt("challenge", "198.51.100.32", 5, 300, now=40)
+    assert len(auth_module._rate_attempts) == 32
+    assert ("challenge", "198.51.100.0") in auth_module._rate_attempts
+    assert ("challenge", "198.51.100.32") not in auth_module._rate_attempts
+    assert auth_module.allow_rate_attempt("challenge", "198.51.100.32", 5, 300, now=400)
+    assert len(auth_module._rate_attempts) == 1
 
 
 def test_concurrent_login_attempts_keep_limiter_state_bounded(monkeypatch) -> None:
-    monkeypatch.setattr(auth_module, "_attempts", {})
+    monkeypatch.setattr(auth_module, "_rate_attempts", {})
+    monkeypatch.setattr(auth_module, "_challenges", {})
     monkeypatch.setattr(auth_module, "_next_cleanup_at", float("inf"))
-    monkeypatch.setattr(auth_module, "MAX_TRACKED_LOGIN_CLIENTS", 64)
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_RATE_BUCKETS", 64)
     with ThreadPoolExecutor(max_workers=16) as pool:
         outcomes = list(pool.map(
-            lambda index: auth_module._record_login_attempt(
-                f"203.0.113.{index}", 1000, 5, 300
+            lambda index: auth_module.allow_rate_attempt(
+                "challenge", f"203.0.113.{index}", 5, 300
             ),
             range(256),
         ))
     assert sum(outcomes) == 64
-    assert len(auth_module._attempts) == 64
-    assert all(len(history) == 1 for history in auth_module._attempts.values())
+    assert len(auth_module._rate_attempts) == 64
+    assert all(len(history) == 1 for history in auth_module._rate_attempts.values())
 
 
 def wait_for_status(client: TestClient, scan_id: str, status: str) -> dict:
@@ -211,7 +267,7 @@ def test_events_are_available_before_scan_process_finishes() -> None:
         events = client.get(
             f"/api/scans/{created['scan_id']}/events?after=0"
         ).json()
-        assert events["events"][-1]["message"] == "127.0.0.1 started"
+        assert events["events"][-1]["message"] == "8.8.8.8 started"
         assert client.get(f"/api/scans/{created['scan_id']}").json()["status"] == "running"
     finally:
         release.set()
@@ -336,7 +392,7 @@ def test_concurrent_scan_events_are_isolated_and_ordered() -> None:
     started = {"a": threading.Event(), "b": threading.Event()}
 
     def scanner(target, profile, *, event_callback):
-        key = "a" if target == "192.0.2.10" else "b"
+        key = "a" if target == "8.8.8.10" else "b"
         event_callback(ScanEvent("stage", f"{key}-one"))
         started[key].set()
         releases[key].wait(timeout=2)
@@ -419,8 +475,11 @@ def test_findings_endpoint_returns_rule_evidence() -> None:
 def test_invalid_targets_are_rejected_and_valid_targets_are_accepted() -> None:
     client, manager = client_for()
     try:
-        assert client.post("/api/scans", json={"target": "http://127.0.0.1", "profile": "basic_tcp"}).status_code == 422
-        assert client.post("/api/scans", json={"target": "192.0.2.1", "profile": "basic_tcp"}).status_code == 202
+        capability = issue_capability("example.test", secrets.token_urlsafe(24), Settings.from_environment())
+        auth_header = {"Authorization": f"Bearer {capability}"}
+        assert client.post("/api/scans", json={"target": "http://127.0.0.1", "profile": "basic_tcp"}, headers=auth_header).status_code == 422
+        assert client.post("/api/scans", json={"target": "example.test", "profile": "basic_tcp"}).status_code == 202
+        assert client.post("/api/scans", json={"target": "192.0.2.1", "profile": "basic_tcp"}, headers=auth_header).status_code == 422
         assert client.post("/api/scans", json={"target": "127.0.0.1", "profile": "unknown"}).status_code == 422
     finally:
         manager.shutdown()
