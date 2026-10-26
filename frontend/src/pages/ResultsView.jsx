@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-function ResultsView({ scan, onNavigate }) {
+function ResultsView({ scan, onNavigate, demoMode }) {
   const [query, setQuery] = useState('')
   const [stateFilter, setStateFilter] = useState('all')
   const [sortOrder, setSortOrder] = useState('port-asc')
@@ -36,19 +36,23 @@ function ResultsView({ scan, onNavigate }) {
     <>
       <section className="page-heading" aria-labelledby="page-title">
         <div>
-          <p className="eyebrow">DEMONSTRATION RESULTS</p>
+          <p className="eyebrow">{demoMode ? 'DEMONSTRATION RESULTS' : 'BACKEND RESULTS'}</p>
           <h1 id="page-title">Scan results</h1>
-          <p className="page-description">Target <strong>{scan.target}</strong> · {scan.profile.replaceAll('-', ' ')}</p>
+          <p className="page-description">Target <strong>{scan.target}</strong> · {scan.profile.replaceAll('_', ' ').replaceAll('-', ' ')}</p>
         </div>
-        <span className="demo-badge demo-badge-light">SAMPLE DATA · NOT A REAL SCAN</span>
+        <span className="demo-badge demo-badge-light">{demoMode ? 'SAMPLE DATA · NOT A REAL SCAN' : 'LIVE BACKEND RESULTS'}</span>
       </section>
 
       <section className="result-summary" aria-label="Scan summary">
-        <div><span>Scan status</span><strong className="status-label status-completed"><span />{scan.status}</strong></div>
-        <div><span>Ports in sample</span><strong>{scan.ports.length}</strong></div>
+        <div><span>Scan status</span><strong className={`status-label status-${scan.status}`}><span />{scan.status}</strong></div>
+        <div><span>{demoMode ? 'Ports in sample' : 'Reported ports'}</span><strong>{scan.ports.length}</strong></div>
         <div><span>Open ports</span><strong>{scan.ports.filter((port) => port.state === 'open').length}</strong></div>
         <div><span>Observations</span><strong>{scan.findings.length}</strong></div>
       </section>
+
+      {scan.status === 'cancelled' && (
+        <p className="alert alert-error" role="note">Incomplete scan: these results contain only observations captured before cancellation. Unscanned ports and services are unknown.</p>
+      )}
 
       <section className="content-section" aria-labelledby="ports-title">
         <div className="section-heading result-heading">
@@ -78,7 +82,7 @@ function ResultsView({ scan, onNavigate }) {
         ) : (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th scope="col">Port</th><th scope="col">Protocol</th><th scope="col">State</th><th scope="col">Service</th><th scope="col">Product</th><th scope="col">Version</th></tr></thead>
+              <thead><tr><th scope="col">Port</th><th scope="col">Protocol</th><th scope="col">State</th><th scope="col">Service</th><th scope="col">Product</th><th scope="col">Version</th><th scope="col">Detection</th></tr></thead>
               <tbody>
                 {ports.map((port) => (
                   <tr key={`${port.port}/${port.protocol}`}>
@@ -88,6 +92,7 @@ function ResultsView({ scan, onNavigate }) {
                     <td data-label="Service">{port.service || <span className="unavailable">Unavailable</span>}</td>
                     <td data-label="Product">{port.product || <span className="unavailable">Unavailable</span>}</td>
                     <td data-label="Version">{port.version || <span className="unavailable">Unavailable</span>}</td>
+                    <td data-label="Detection">{port.detectionMethod ? `${port.detectionMethod}${port.serviceConfidence == null ? '' : ` (${port.serviceConfidence}/10)`}` : <span className="unavailable">Unavailable</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -98,14 +103,14 @@ function ResultsView({ scan, onNavigate }) {
 
       <section className="content-section findings-section" aria-labelledby="findings-title">
         <div className="section-heading">
-          <div><p className="eyebrow">BACKEND-STYLE OBSERVATIONS</p><h2 id="findings-title">Potential findings</h2></div>
+          <div><p className="eyebrow">BACKEND FINDINGS</p><h2 id="findings-title">Potential findings</h2></div>
         </div>
         {scan.findings.length === 0 ? (
-          <div className="empty-list"><strong>No demonstration findings</strong><p>This is not a security guarantee; no real analysis was performed.</p></div>
+          <div className="empty-list"><strong>No findings reported</strong><p>{demoMode ? 'This is not a security guarantee; no real analysis was performed.' : 'No rule-based findings were generated; this is not a security guarantee.'}</p></div>
         ) : scan.findings.map((finding) => (
           <article className="finding-row" key={finding.id}>
             <span className="severity-tag">{finding.severity}</span>
-            <div><strong>{finding.title}</strong><p>{finding.description}</p></div>
+            <div><strong>{finding.title}</strong><p>{finding.description}</p>{!demoMode && <><p>{finding.evidence}</p><p>{finding.remediation}</p></>}</div>
           </article>
         ))}
       </section>

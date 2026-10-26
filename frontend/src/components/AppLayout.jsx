@@ -5,7 +5,13 @@ const NAV_ITEMS = [
   { id: 'reports', label: 'Reports', marker: '04' },
 ]
 
-function AppLayout({ page, onNavigate, demoMode, children }) {
+function AppLayout({ page, onNavigate, demoMode, modeLabel, connectionState, children }) {
+  const connectionText = {
+    checking: 'Checking API connection',
+    connected: 'API connected',
+    disconnected: 'API unavailable',
+    demo: 'No API connection',
+  }[connectionState]
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -14,10 +20,10 @@ function AppLayout({ page, onNavigate, demoMode, children }) {
           <span>Nmap <strong>Automator</strong></span>
         </button>
         <div className="topbar-state">
-          <span className="demo-badge">DEMO MODE</span>
+          <span className="demo-badge">{modeLabel}</span>
           <span className="connection-status">
-            <span className="status-dot" aria-hidden="true" />
-            API not connected
+            <span className={`status-dot status-dot-${connectionState}`} aria-hidden="true" />
+            {connectionText}
           </span>
         </div>
       </header>
