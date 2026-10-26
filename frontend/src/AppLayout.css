@@ -266,9 +266,3 @@
   .report-controls .download-link { width: 100%; }
   .report-metadata { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.verification-record { display: grid; gap: 12px; padding: 16px; border: 1px solid #c8d9d6; border-radius: 10px; background: #f6faf9; }
-.verification-record p, .verification-record dl { margin: 0; }
-.verification-record dl { display: grid; gap: 6px; }
-.verification-record dt { font-weight: 700; }
-.verification-record dd { margin: 0 0 8px; overflow-wrap: anywhere; }
-.verification-record code { user-select: all; }

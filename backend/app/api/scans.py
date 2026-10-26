@@ -1,4 +1,4 @@
-"""Capability-protected scan endpoints for verified hostnames."""
+"""Capability-protected scan endpoints for public targets."""
 
 import ipaddress
 import socket
@@ -20,7 +20,7 @@ from backend.app.schemas.scan import (
     ScanPortsResponse,
     ScanResponse,
 )
-from backend.app.scanner.validation import TargetValidationError, validate_fqdn
+from backend.app.scanner.validation import TargetValidationError, validate_target
 from backend.app.services.scan_manager import (
     ScanCapacityError,
     ScanManager,
@@ -51,37 +51,50 @@ def get_scan_manager() -> ScanManager:
 _manager = ScanManager.from_environment()
 
 
-def resolve_public_scan_address(hostname: str) -> str:
-    """Resolve once and return a public IP so Nmap cannot follow DNS rebinding."""
+def _validated_public_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    address = ipaddress.ip_address(value)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if (
+        not address.is_global
+        or address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        or any(
+            address.version == network.version and address in network
+            for network in _SPECIAL_PURPOSE_NETWORKS
+        )
+    ):
+        raise HTTPException(status_code=403, detail="Target resolves to a non-public or special-purpose address.")
+    return address
+
+
+def resolve_public_scan_address(target: str) -> str:
+    """Validate an IP or resolve a hostname once, preventing DNS rebinding."""
     try:
-        answers = socket.getaddrinfo(f"{hostname}.", None, type=socket.SOCK_STREAM)
+        direct_address = ipaddress.ip_address(target)
+    except ValueError:
+        direct_address = None
+    if direct_address is not None:
+        return str(_validated_public_ip(str(direct_address)))
+    try:
+        answers = socket.getaddrinfo(f"{target}.", None, type=socket.SOCK_STREAM)
     except OSError as exc:
-        raise HTTPException(status_code=422, detail="The verified hostname could not be resolved.") from exc
+        raise HTTPException(status_code=422, detail="The target hostname could not be resolved.") from exc
     addresses: set[str] = set()
     for answer in answers:
         try:
-            address = ipaddress.ip_address(answer[4][0])
+            address = _validated_public_ip(answer[4][0])
         except (ValueError, IndexError, TypeError) as exc:
             raise HTTPException(status_code=422, detail="DNS returned an invalid address.") from exc
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
             address = address.ipv4_mapped
-        if (
-            not address.is_global
-            or address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_reserved
-            or address.is_unspecified
-            or any(
-                address.version == network.version and address in network
-                for network in _SPECIAL_PURPOSE_NETWORKS
-            )
-        ):
-            raise HTTPException(status_code=403, detail="The hostname resolves to a non-public or special-purpose address.")
         addresses.add(str(address))
     if not addresses:
-        raise HTTPException(status_code=422, detail="The verified hostname has no usable address records.")
+        raise HTTPException(status_code=422, detail="The target hostname has no usable address records.")
     # One scan request may target only one resolved address. Sorted order keeps
     # selection stable when a hostname has multiple validated public records.
     return sorted(addresses, key=lambda item: (ipaddress.ip_address(item).version, item))[0]
@@ -106,18 +119,15 @@ def create_scan(
     if not allow_rate_attempt("scan", client, settings.scan_rate_limit, settings.rate_limit_window_seconds):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many scan submissions. Try again later.")
     try:
-        hostname = validate_fqdn(payload.target)
+        target = validate_target(payload.target)
     except TargetValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if hostname != capability.hostname:
-        raise HTTPException(status_code=403, detail="This capability is limited to its verified hostname.")
-    if settings.scan_target_allowlist and hostname not in settings.scan_target_allowlist:
-        raise HTTPException(status_code=403, detail="This hostname is not included in the configured target allowlist.")
-
-    scan_address = resolve_public_scan_address(hostname)
+    scan_address = resolve_public_scan_address(target)
+    if settings.scan_target_allowlist and target not in settings.scan_target_allowlist and scan_address not in settings.scan_target_allowlist:
+        raise HTTPException(status_code=403, detail="Target is not included in the configured scan allowlist.")
     try:
         return manager.submit(
-            hostname,
+            target,
             payload.profile,
             scan_target=scan_address,
             owner_id=capability.owner_id,

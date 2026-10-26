@@ -144,7 +144,7 @@ class ScanManager:
             return self._to_response(record)
 
     def ensure_owner(self, scan_id: str, owner_id: str) -> None:
-        """Hide records owned by a different verification capability."""
+        """Hide records owned by a different anonymous browser session."""
         with self._lock:
             record = self._records.get(scan_id)
             if record is None or record.owner_id != owner_id:

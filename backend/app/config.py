@@ -27,10 +27,8 @@ class Settings:
     app_env: str
     app_auth_secret: str
     capability_ttl_seconds: int
-    verification_challenge_ttl_seconds: int
     rate_limit_window_seconds: int
-    challenge_rate_limit: int
-    verification_rate_limit: int
+    session_rate_limit: int
     scan_rate_limit: int
     scan_target_allowlist: tuple[str, ...]
 
@@ -84,13 +82,9 @@ class Settings:
             max_pending_scans=_positive_int_setting("MAX_PENDING_SCANS", 4, MAX_PENDING_SCANS),
             app_env=app_env,
             app_auth_secret=secret,
-            capability_ttl_seconds=_positive_int_setting("APP_CAPABILITY_TTL_SECONDS", 3600, 86400),
-            verification_challenge_ttl_seconds=_positive_int_setting(
-                "DOMAIN_CHALLENGE_TTL_SECONDS", 600, 3600
-            ),
+            capability_ttl_seconds=_positive_int_setting("APP_CAPABILITY_TTL_SECONDS", 86400, 86400),
             rate_limit_window_seconds=_positive_int_setting("PUBLIC_RATE_WINDOW_SECONDS", 3600, 86400),
-            challenge_rate_limit=_positive_int_setting("DOMAIN_CHALLENGE_LIMIT", 10, 100),
-            verification_rate_limit=_positive_int_setting("DOMAIN_VERIFICATION_LIMIT", 20, 100),
+            session_rate_limit=_positive_int_setting("ANONYMOUS_SESSION_LIMIT", 30, 100),
             scan_rate_limit=_positive_int_setting("SCAN_SUBMISSION_LIMIT", 20, 100),
             scan_target_allowlist=allowlist,
         )
