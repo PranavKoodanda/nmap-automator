@@ -54,6 +54,8 @@ Scanner = Callable[[str, ScanProfile], ScanExecutionResult]
 class _ScanRecord:
     scan_id: str
     target: str
+    scan_target: str
+    owner_id: str
     profile: ScanProfile
     created_at: datetime
     status: ScanStatus = ScanStatus.QUEUED
@@ -105,12 +107,21 @@ class ScanManager:
             max_pending=settings.max_pending_scans,
         )
 
-    def submit(self, target: str, profile: ScanProfile) -> ScanResponse:
+    def submit(
+        self,
+        target: str,
+        profile: ScanProfile,
+        *,
+        scan_target: str | None = None,
+        owner_id: str = "internal",
+    ) -> ScanResponse:
         if not self._capacity.acquire(blocking=False):
             raise ScanCapacityError("Scan queue capacity has been reached.")
         record = _ScanRecord(
             scan_id=str(uuid4()),
             target=target,
+            scan_target=scan_target or target,
+            owner_id=owner_id,
             profile=profile,
             created_at=datetime.now(timezone.utc),
         )
@@ -131,6 +142,13 @@ class ScanManager:
             if record is None:
                 raise ScanNotFoundError(scan_id)
             return self._to_response(record)
+
+    def ensure_owner(self, scan_id: str, owner_id: str) -> None:
+        """Hide records owned by a different verification capability."""
+        with self._lock:
+            record = self._records.get(scan_id)
+            if record is None or record.owner_id != owner_id:
+                raise ScanNotFoundError(scan_id)
 
     def get_events(self, scan_id: str, after: int = 0) -> ScanEventsResponse:
         with self._lock:
@@ -297,9 +315,9 @@ class ScanManager:
                 partial_result = getattr(exc, "partial_result", None)
                 if partial_result is None:
                     partial_result = ScanExecutionResult(
-                        target=record.target,
+                        target=record.scan_target,
                         profile=record.profile,
-                        scan=ScanResult(target=record.target, ports=()),
+                        scan=ScanResult(target=record.scan_target, ports=()),
                         stderr="",
                         returncode=-1,
                     )
@@ -369,7 +387,7 @@ class ScanManager:
                     kwargs["event_callback"] = event_callback
                 if supports_cancel:
                     kwargs["cancel_event"] = self._records[record.scan_id].cancel_event
-                return scanner(record.target, record.profile, **kwargs)
+                return scanner(record.scan_target, record.profile, **kwargs)
             except TypeError as exc:
                 message = str(exc)
                 if not any(name in message for name in ("event_callback", "progress_callback", "cancel_event")):
@@ -381,8 +399,8 @@ class ScanManager:
                     fallback_kwargs.pop("progress_callback", None)
                 if "cancel_event" in message:
                     fallback_kwargs.pop("cancel_event", None)
-                return scanner(record.target, record.profile, **fallback_kwargs)
-        return scanner(record.target, record.profile)
+                return scanner(record.scan_target, record.profile, **fallback_kwargs)
+        return scanner(record.scan_target, record.profile)
 
     def _update_progress(self, scan_id: str, update: ProgressUpdate) -> None:
         now = datetime.now(timezone.utc)

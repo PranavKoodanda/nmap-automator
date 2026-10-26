@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ScanProgressBar from '../components/ScanProgressBar'
+import { createDomainChallenge, verifyDomainChallenge } from '../services/scanService'
 
 function validateTarget(value) {
   const target = value.trim()
@@ -34,15 +35,67 @@ function validateTarget(value) {
   return validHostname ? '' : 'Enter a valid hostname using letters, numbers, and hyphens.'
 }
 
-function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
+function validateFqdn(value) {
+  const syntaxError = validateTarget(value)
+  if (syntaxError) return syntaxError
+  const hostname = value.trim().replace(/\.$/, '')
+  if (hostname.includes(':') || /^[\d.]+$/.test(hostname)) {
+    return 'Public scans require a fully qualified domain name, not an IP address.'
+  }
+  if (!hostname.includes('.')) return 'Enter a fully qualified domain name, such as example.com.'
+  return ''
+}
+
+function StartScan({ profiles, activeScan, error, onStartScan, verifiedHost, onVerified, demoMode }) {
   const [target, setTarget] = useState('')
   const [profile, setProfile] = useState(profiles[0]?.id ?? '')
   const [validationError, setValidationError] = useState('')
+  const [verificationError, setVerificationError] = useState('')
+  const [domain, setDomain] = useState('')
+  const [challenge, setChallenge] = useState(null)
+  const [verificationBusy, setVerificationBusy] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  const needsVerification = !demoMode && !verifiedHost
+
+  async function handleCreateChallenge(event) {
+    event.preventDefault()
+    const errorMessage = validateFqdn(domain)
+    if (errorMessage) {
+      setVerificationError(errorMessage)
+      return
+    }
+    setVerificationBusy(true)
+    setVerificationError('')
+    try {
+      setChallenge(await createDomainChallenge(domain.trim()))
+    } catch (error) {
+      setVerificationError(error.message)
+    } finally {
+      setVerificationBusy(false)
+    }
+  }
+
+  async function handleVerifyChallenge() {
+    if (!challenge) return
+    setVerificationBusy(true)
+    setVerificationError('')
+    try {
+      const hostname = await verifyDomainChallenge(challenge.challenge_id)
+      setChallenge(null)
+      setDomain('')
+      onVerified(hostname)
+    } catch (error) {
+      setVerificationError(error.message)
+    } finally {
+      setVerificationBusy(false)
+    }
+  }
 
   async function handleSubmit(event) {
     event.preventDefault()
-    const targetError = validateTarget(target)
+    const scanTarget = demoMode ? target : verifiedHost
+    const targetError = demoMode ? validateTarget(target) : validateFqdn(scanTarget)
     if (targetError || !profile) {
       setValidationError(targetError || 'Select an approved scan profile.')
       return
@@ -51,7 +104,7 @@ function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
     setValidationError('')
     setSubmitting(true)
     try {
-      await onStartScan(target.trim(), profile, () => setSubmitting(false))
+      await onStartScan(scanTarget.trim(), profile, () => setSubmitting(false))
     } catch {
       // The parent exposes the service error in the form.
     } finally {
@@ -71,20 +124,68 @@ function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
       </section>
 
       <div className="scan-layout">
-        <form className="form-panel" onSubmit={handleSubmit} noValidate>
+        <form className="form-panel" onSubmit={needsVerification ? handleCreateChallenge : handleSubmit} noValidate>
+          {needsVerification ? (
+            <>
+              <div className="panel-heading">
+                <p className="eyebrow">DOMAIN OWNERSHIP</p>
+                <h2>Verify a hostname</h2>
+              </div>
+              <p className="field-help">To enable scanning, publish the TXT record below on a fully qualified domain name you control. Only that hostname can be scanned.</p>
+              <label className="field-label" htmlFor="verification-domain">Domain name</label>
+              <input
+                id="verification-domain"
+                className="text-input"
+                type="text"
+                autoComplete="url"
+                spellCheck="false"
+                placeholder="example.com"
+                value={domain}
+                onChange={(event) => setDomain(event.target.value)}
+                disabled={verificationBusy}
+              />
+              {challenge && (
+                <div className="verification-record" aria-live="polite">
+                  <p>Add this DNS TXT record. DNS propagation may take a few minutes.</p>
+                  <dl>
+                    <dt>Record name</dt><dd><code>{challenge.record_name}</code></dd>
+                    <dt>TXT value</dt><dd><code>{challenge.txt_value}</code></dd>
+                    <dt>Challenge expires</dt><dd>{new Date(challenge.expires_at).toLocaleString()}</dd>
+                  </dl>
+                  <button className="primary-button" type="button" onClick={handleVerifyChallenge} disabled={verificationBusy}>
+                    {verificationBusy ? 'Checking DNS…' : 'Verify DNS record'}
+                  </button>
+                </div>
+              )}
+              {verificationError && <div className="alert alert-error" role="alert">{verificationError}</div>}
+              {!challenge && (
+                <button className="primary-button submit-button" type="submit" disabled={verificationBusy}>
+                  {verificationBusy ? 'Creating challenge…' : 'Create DNS challenge'}
+                </button>
+              )}
+              <p className="form-disclaimer">Challenges expire and are stored temporarily in backend memory. DNS ownership verification is required before scans are enabled.</p>
+            </>
+          ) : (
+          <>
           <div className="panel-heading">
             <p className="eyebrow">CONFIGURATION</p>
-            <h2>Scan parameters</h2>
+            <h2>{demoMode ? 'Scan parameters' : 'Verified scan target'}</h2>
           </div>
-          <label className="field-label" htmlFor="scan-target">Target IP or hostname</label>
+          {!demoMode && (
+            <button className="text-button" type="button" onClick={() => onVerified('')}>
+              Verify a different hostname
+            </button>
+          )}
+          <label className="field-label" htmlFor="scan-target">{demoMode ? 'Target IP or hostname' : 'Verified hostname'}</label>
           <input
             id="scan-target"
             className="text-input"
             type="text"
             autoComplete="off"
             spellCheck="false"
-            placeholder={demoMode ? 'e.g. 192.0.2.10 or demo.example.test' : 'e.g. 127.0.0.1'}
-            value={target}
+            placeholder={demoMode ? 'e.g. 192.0.2.10 or demo.example.test' : 'Verified domain'}
+            value={demoMode ? target : verifiedHost}
+            disabled={!demoMode}
             onChange={(event) => setTarget(event.target.value)}
             aria-invalid={Boolean(validationError)}
             aria-describedby={validationError ? 'target-error' : 'target-help'}
@@ -92,7 +193,7 @@ function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
           {validationError ? (
             <p id="target-error" className="field-error" role="alert">{validationError}</p>
           ) : (
-            <p id="target-help" className="field-help">{demoMode ? 'Use a target you are authorized to assess. Demo mode never contacts it.' : 'Use only a target you own or are explicitly authorized to assess.'}</p>
+            <p id="target-help" className="field-help">{demoMode ? 'Demo mode never contacts this target.' : 'Ownership is verified by DNS TXT record. The backend will scan one validated public address for this hostname.'}</p>
           )}
 
           <label className="field-label" htmlFor="scan-profile">Approved scan profile</label>
@@ -117,7 +218,9 @@ function StartScan({ profiles, activeScan, error, onStartScan, demoMode }) {
           <button className="primary-button submit-button" type="submit" disabled={submitting}>
             {submitting ? (demoMode ? 'Running simulation…' : 'Submitting scan…') : (demoMode ? 'Start demo scan' : 'Start scan')}
           </button>
-          <p className="form-disclaimer">{demoMode ? 'This development workflow uses fixed sample results. It does not run Nmap.' : 'The backend uses only approved scan profiles and its configured authorization policy.'}</p>
+          <p className="form-disclaimer">{demoMode ? 'This development workflow uses fixed sample results. It does not run Nmap.' : 'The backend uses fixed scan profiles, public-address checks, and bounded scan capacity.'}</p>
+          </>
+          )}
         </form>
 
         <aside className="simulation-panel" aria-label="Simulation status">

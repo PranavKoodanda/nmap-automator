@@ -48,3 +48,17 @@ def validate_target(target: str) -> str:
         raise TargetValidationError("Target must be a valid hostname.")
 
     return ascii_hostname.lower()
+
+
+def validate_fqdn(target: str) -> str:
+    """Normalize a public, fully qualified hostname; reject IPs and local names."""
+    normalized = validate_target(target)
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        raise TargetValidationError("A fully qualified domain name is required; IP addresses are not accepted.")
+    if "." not in normalized or normalized.endswith("."):
+        raise TargetValidationError("Enter a fully qualified domain name with at least two labels.")
+    return normalized

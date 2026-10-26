@@ -1,22 +1,33 @@
 # Nmap Automator API contract
 
-The API validates target syntax and applies `SCAN_TARGET_ALLOWLIST` when set;
-production requires this comma-separated allowlist and rejects all other
-targets. Operators must only scan systems they own or are explicitly
-authorized to assess. Nmap execution remains restricted to fixed profiles,
+The API requires DNS ownership proof for every hostname. When
+`SCAN_TARGET_ALLOWLIST` is configured, it further limits eligible hostnames;
+when unset, DNS proof and public-address validation remain mandatory. Operators
+must only scan systems they own or are explicitly authorized to assess. Nmap
+execution remains restricted to fixed profiles,
 shell-free argument lists, timeouts, and bounded queue capacity. CORS origins
 are configured through `FRONTEND_CORS_ORIGINS` and default to
 `http://localhost:5173`. CORS is not an authorization mechanism.
 
-`POST /api/auth/login` accepts `{"password":"..."}` and returns a signed,
-expiring bearer token. Set `APP_ACCESS_PASSWORD` and `APP_AUTH_SECRET` only in
-the backend environment. Every `/api/scans` endpoint requires
-`Authorization: Bearer <token>`. Login attempts are rate limited. `GET /health`
-is public and intended for health checks. Production (`APP_ENV=production`)
-requires a non-placeholder password of at least 12 characters, a high-entropy
-signing secret of at least 32 characters, explicit HTTPS frontend origins, and
-a non-empty target allowlist. CORS is not authentication. Login throttling is
-bounded and process-local; it is not shared between backend instances.
+`POST /api/verification/challenges` creates a short-lived DNS TXT challenge for
+a fully qualified hostname. Publish the returned record and call
+`POST /api/verification/verify` to receive a signed, expiring capability bound
+to that normalized hostname. Every `/api/scans` operation requires that
+capability. Scan IDs are unguessable and records are additionally bound to the
+capability's unique owner ID; a capability for another visitor or hostname
+cannot access them. `GET /health` is public and intended for health checks.
+Production (`APP_ENV=production`) requires a high-entropy `APP_AUTH_SECRET` of
+at least 32 characters and explicit HTTPS frontend origins. An optional static
+target allowlist adds a restriction; DNS proof and public-address validation
+are always required. CORS is not authentication.
+
+Challenge creation, verification, and scan submissions are rate limited. The
+challenge and rate-limit stores are bounded and process-local, not shared
+between backend instances. Challenges expire after the configured TTL and all
+in-memory records, capabilities' ownership, and scan history are lost on a
+backend restart. The scan manager also stores jobs in process memory, so this
+deployment should run as one backend instance unless shared storage and
+coordination are added.
 
 Scans and their history are stored in memory only and disappear when the
 process restarts. Work is bounded by the in-memory manager and returns
