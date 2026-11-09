@@ -1,6 +1,36 @@
 # nmap-automator
 A Python-based network security assessment tool that automates Nmap scanning, identifies open ports and services, analyzes potential security risks, and generates comprehensive security assessment reports through a web dashboard.
 
+## Local Docker Compose deployment
+
+This local educational setup runs exactly two containers:
+
+- `frontend`: a Vite production build served by Nginx. Nginx serves the React single-page app and proxies `/api/` and `/health` to the backend over Docker's private network.
+- `backend`: FastAPI and Nmap, running as a non-root user. It is not published to the host; only the frontend is exposed at `127.0.0.1:8080`.
+
+Prerequisites: Docker Desktop (or Docker Engine) with Compose, Python 3 for generating a signing secret, and a free local port 8080. Copy the example environment file, generate a private secret, and start both services:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+$secret = python -c "import secrets; print(secrets.token_urlsafe(48))"
+(Get-Content .env) -replace '^APP_AUTH_SECRET=.*$', "APP_AUTH_SECRET=$secret" | Set-Content .env
+docker compose up --build -d
+```
+
+Then open <http://localhost:8080>. The Compose build sets an empty `VITE_API_BASE_URL`, which makes the browser use same-origin API paths; the Nginx container proxies those requests internally. An explicit HTTPS `VITE_API_BASE_URL` remains supported for the separate Vercel deployment.
+
+Useful PowerShell commands:
+
+```powershell
+docker compose logs -f backend frontend
+docker compose exec backend nmap --version
+Invoke-RestMethod http://localhost:8080/health
+docker compose ps
+docker compose down
+```
+
+Scan records and rate limits are held in backend memory and disappear when the backend restarts. This Compose setup is separate from the existing Vercel frontend and Render backend deployment. It uses local development settings for the demonstration and binds the published port to loopback; do not expose this configuration directly to the public internet. Scan only targets you own or are explicitly authorized to assess.
+
 ## Local development
 
 The backend accepts an IP address or hostname without a login or DNS ownership
