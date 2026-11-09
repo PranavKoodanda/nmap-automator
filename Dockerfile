@@ -18,6 +18,10 @@ RUN python -m pip install --no-cache-dir -r backend/requirements.txt
 # Copy backend source.
 COPY backend ./backend
 
+# TCP connect scans work without raw-socket privileges, so the API can run unprivileged.
+RUN useradd --system --create-home --home-dir /home/nmap --shell /usr/sbin/nologin nmap
+USER nmap
+
 EXPOSE 10000
 
 CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]

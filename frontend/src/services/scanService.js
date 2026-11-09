@@ -7,7 +7,7 @@ import {
 
 const configuredApiUrl = (import.meta.env.VITE_API_BASE_URL || '').trim()
 let API_CONFIGURATION_ERROR = ''
-if (import.meta.env.PROD) {
+if (import.meta.env.PROD && configuredApiUrl) {
   try {
     const apiUrl = new URL(configuredApiUrl)
     if (apiUrl.protocol !== 'https:' || apiUrl.username || apiUrl.password ||
@@ -77,7 +77,7 @@ async function request(path, options = {}, retriedAfterSessionExpiry = false) {
   } catch {
     throw new ApiError(API_BASE_URL
       ? 'The backend could not be reached. Check the API URL and try again.'
-      : 'VITE_API_BASE_URL is required for a production build.')
+      : 'The backend could not be reached through the frontend proxy. Try again later.')
   }
 
   if (!response.ok) {
@@ -109,7 +109,7 @@ async function ensureSession() {
       } catch {
         throw new ApiError(API_BASE_URL
           ? 'The backend could not be reached. Check the API URL and try again.'
-          : 'VITE_API_BASE_URL is required for a production build.')
+          : 'The backend could not be reached through the frontend proxy. Try again later.')
       }
       if (!response.ok) {
         throw new ApiError(`Could not create an anonymous browser session (${response.status}).`, response.status)
